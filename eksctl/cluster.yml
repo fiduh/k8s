@@ -2,29 +2,18 @@ apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
 metadata:
-  name: basic-cluster
+  name: basic-cluster  #Cluster name
   region: us-east-1
-  version: "1.31"
-
-iam:
-  withOIDC: true
-
-nodeGroups:
-  - name: ng-1
-    instanceType: m5.large
-    desiredCapacity: 2
-    amiFamily: "Bottlerocket"
-    tags:
-      costid: iac
-      createdby: eksctl
+  version: "1.31"  #Kubernetes version
 
 
 addonsConfig:
   disableDefaultAddons: true
+  autoApplyPodIdentityAssociations: true
 
-addons:
-  - name: vpc-cni # no version is specified so it deploys the default version
-    attachPolicyARNs:
-      - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+# Cilium addon(Cluster CNI), CoreDNS
+addons: 
+  - name: eks-pod-identity-agent
+    useDefaultPodIdentityAssociations: true
   - name: coredns
-    version: latest # auto discovers the latest available: 
+    useDefaultPodIdentityAssociations: true
