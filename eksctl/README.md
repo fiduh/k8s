@@ -86,7 +86,7 @@ helm install cilium cilium/cilium --version 1.16.4 \
 #### Deploy app using Deployment, Service, PVC
 
 ```bash
-cd app && kubectl apply .
+kubectl apply -f app/.
 ```
 
 ## Service Networking
@@ -95,6 +95,12 @@ cd app && kubectl apply .
     - GatewayClass
     - Gateway
     - HTTPRoute --> Service
+
+```bash
+kubectl apply -f gateway.yml
+
+kubectl apply -f httproute.yml
+```
 
 
 
