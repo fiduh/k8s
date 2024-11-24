@@ -40,6 +40,17 @@ iam:
     createServiceAccount: true
     wellKnownPolicies: 
       awsLoadBalancerController: true
+    permissionPolicy:
+      Version: "2012-10-17"
+      Statement:
+      - Effect: Allow
+        Action:
+        - "ec2:*"
+        Resource: '*'
+      - Effect: Allow
+        Action:
+        - "elasticloadbalancing:*"
+        Resource: '*'
 
   - namespace: kube-system 
     serviceAccountName: ack-apigatewayv2-controller
