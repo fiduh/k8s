@@ -83,6 +83,12 @@ helm install cilium cilium/cilium --version 1.16.4 \
     kubectl get deployment -n kube-system aws-load-balancer-controller
 ```
 
+#### Deploy app using Deployment, Service, PVC
+
+```bash
+cd app && kubectl apply .
+```
+
 ## Service Networking
 #### Gateway API (Cilium implementation) (North/South Trafffic) - accepting traffic into the cluster, create using Helm. This creates an NLB (Network Load Balancer) that accepts external traffic
     - Install Gateway API CRDs 
