@@ -54,7 +54,7 @@ iam:
 
   - namespace: kube-system 
     serviceAccountName: ack-apigatewayv2-controller
-    createServiceAccount: true
+    createServiceAccount: false
     permissionPolicy:
       Version: "2012-10-17"
       Statement:

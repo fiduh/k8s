@@ -1,0 +1,60 @@
+apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+kind: API
+metadata:
+  name: "ack-api"
+spec:
+  name: "ack-api"
+  protocolType: HTTP
+  corsConfiguration:
+    allowHeaders:
+      - content-type
+    allowMethods:
+      - "*"
+    allowOrigins:
+      - "*"
+
+---
+
+apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+kind: Integration
+metadata:
+  name: "private-nlb-integration"
+spec:
+  apiRef:
+    from:
+      name: "ack-api"
+  integrationType: HTTP_PROXY
+  integrationURI: "arn:aws:elasticloadbalancing:us-east-1:619071319195:listener/net/k8s-default-ciliumga-e36d5f897e/85795fb9e0ff05dd/c2e2af35e4f33d8e"
+  integrationMethod: "ANY"
+  connectionType: VPC_LINK
+  connectionID: "m184ta"
+  payloadFormatVersion: "1.0"
+
+---
+
+apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+kind: Route
+metadata:
+  name: "ack-route"
+spec:
+  apiRef:
+    from:
+      name: "ack-api"
+  routeKey: "ANY /"
+  targetRef:
+    from:
+      name: "private-nlb-integration"
+
+---
+
+apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+kind: Stage
+metadata:
+  name: "dev"
+spec:
+  apiRef:
+    from:
+      name: "ack-api"
+  stageName: "dev"
+  autoDeploy: true
+  description: "auto deployed stage for ack-api"
