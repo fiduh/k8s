@@ -4,6 +4,9 @@
     - Addons: CoreDNS and eks-pod-identity-agent
 
 ```bash 
+export CLUSTER_NAME=basic-cluster
+export AGW_AWS_REGION=us-east-1
+
 eksctl create cluster -f cluster.yml
 ```
 
@@ -24,11 +27,15 @@ eksctl create podidentityassociation -f pod-identity.yml
     - In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI, so the aws-node DaemonSet has to be patched to prevent conflict behavior.
     - set your API_SERVER_IP and API_SERVER_PORT by using `kubectl cluster-info`
 
+# Before we install Cilium with Gateway API, we need to make sure we install the Gateway API CRDs
+[Install standard channels crds](https://gateway-api.sigs.k8s.io/guides/?h=crds#getting-started-with-gateway-api)
+
 ```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
 
 helm repo add cilium https://helm.cilium.io/ && helm repo update cilium
 
-API_SERVER_IP=B2B616832E36D6C5AB99D8EB7300C44F.gr7.us-east-1.eks.amazonaws.com
+API_SERVER_IP=$(aws eks describe-cluster --name $CLUSTER_NAME --query "cluster.endpoint" --output text | sed 's|https://||')
 API_SERVER_PORT=443
 
 helm install cilium cilium/cilium --version 1.16.4 \
@@ -40,9 +47,14 @@ helm install cilium cilium/cilium --version 1.16.4 \
   --set operator.serviceAccount.create=false \
   --set routingMode=native \
   --set kubeProxyReplacement=true \
+  --set nodePort.enabled=true \
+  --set l7Proxy=true \
+  --set endpointRoutes.enabled=true \
   --set k8sServiceHost=${API_SERVER_IP} \
   --set k8sServicePort=${API_SERVER_PORT} \
-  --set cluster.name=basic-cluster
+  --set cluster.name=${CLUSTER_NAME} \
+  --set gatewayAPI.enabled=true \
+  
 ```
 
 
@@ -53,7 +65,7 @@ helm install cilium cilium/cilium --version 1.16.4 \
 
     - ## Get EKS cluster VPC ID
     export AGW_VPC_ID=$(aws eks describe-cluster \
-    --name $AGW_EKS_CLUSTER_NAME \
+    --name $CLUSTER_NAME \
     --region $AGW_AWS_REGION  \
     --query "cluster.resourcesVpcConfig.vpcId" \
     --output text)
@@ -62,7 +74,7 @@ helm install cilium cilium/cilium --version 1.16.4 \
 
     helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
     -n kube-system \
-    --set clusterName=basic-cluster \
+    --set clusterName=$CLUSTER_NAME \
     --set serviceAccount.create=false \
     --set serviceAccount.name=aws-load-balancer-controller \
     --set region=$AGW_AWS_REGION \
@@ -70,6 +82,14 @@ helm install cilium cilium/cilium --version 1.16.4 \
 
     kubectl get deployment -n kube-system aws-load-balancer-controller
 ```
+
+## Service Networking
+#### Gateway API (Cilium implementation) (North/South Trafffic) - accepting traffic into the cluster, create using Helm. This creates an NLB (Network Load Balancer) that accepts external traffic
+    - Install Gateway API CRDs 
+    - GatewayClass
+    - Gateway
+    - HTTPRoute --> Service
+
 
 
 #### Deploy ACK Controller for API Gateway
@@ -79,7 +99,7 @@ helm install cilium cilium/cilium --version 1.16.4 \
 *You can use the Helm CLI to log into the ECR public Helm registry and install the chart.*
 
 ```bash
-    export ACK_SYSTEM_NAMESPACE=ack-system
+    export ACK_SYSTEM_NAMESPACE=kube-system
     export SERVICE=apigatewayv2
     export RELEASE_VERSION=$(curl -sL https://api.github.com/repos/aws-controllers-k8s/${SERVICE}-controller/releases/latest | jq -r '.tag_name | ltrimstr("v")')
     export AWS_REGION=us-east-1
@@ -93,19 +113,141 @@ helm install cilium cilium/cilium --version 1.16.4 \
 
 ```
 
-#### VPC Link - private integration with AWS VPC ***K8S CRD***
+## Create API Gateway resources
+    - Create security group for the VPC link:
+```bash
+    AGW_VPCLINK_SG=$(aws ec2 create-security-group \
+    --description "SG for VPC Link" \
+    --group-name SG_VPC_LINK \
+    --vpc-id $AGW_VPC_ID \
+    --region $AGW_AWS_REGION \
+    --output text \
+    --query 'GroupId')
+```
+
+#### Create a VPC Link for the internal NLB:
+```bash
+    cat > vpclink.yaml<<EOF
+    apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+    kind: VPCLink
+    metadata:
+    name: nlb-internal
+    spec:
+    name: nlb-internal
+    securityGroupIDs: 
+        - $AGW_VPCLINK_SG
+    subnetIDs: 
+        - $(aws ec2 describe-subnets \
+            --filter Name=tag:kubernetes.io/role/internal-elb,Values=1 \
+            --query 'Subnets[0].SubnetId' \
+            --region $AGW_AWS_REGION --output text)
+        - $(aws ec2 describe-subnets \
+            --filter Name=tag:kubernetes.io/role/internal-elb,Values=1 \
+            --query 'Subnets[1].SubnetId' \
+            --region $AGW_AWS_REGION --output text)
+        - $(aws ec2 describe-subnets \
+            --filter Name=tag:kubernetes.io/role/internal-elb,Values=1 \
+            --query 'Subnets[2].SubnetId' \
+            --region $AGW_AWS_REGION --output text)
+    EOF
+
+    kubectl apply -f vpclink.yaml
+
+    aws apigatewayv2 get-vpc-links --region $AGW_AWS_REGION
+```
+
+
+#### Create an API with VPC Link integration: - private integration with AWS VPC ***K8S CRD***
+
+```bash
+
+    cat > apigw-api.yaml<<EOF
+    apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+    kind: API
+    metadata:
+    name: apitest-private-nlb
+    spec:
+    body: '{
+                "openapi": "3.0.1",
+                "info": {
+                    "title": "ack-apigwv2-import-test-private-nlb",
+                    "version": "v1"
+                },
+                "paths": {
+                "/\$default": {
+                    "x-amazon-apigateway-any-method" : {
+                    "isDefaultRoute" : true,
+                    "x-amazon-apigateway-integration" : {
+                    "payloadFormatVersion" : "1.0",
+                    "connectionId" : "$(kubectl get vpclinks.apigatewayv2.services.k8s.aws \
+    nlb-internal \
+    -o jsonpath="{.status.vpcLinkID}")",
+                    "type" : "http_proxy",
+                    "httpMethod" : "GET",
+                    "uri" : "$(aws elbv2 describe-listeners \
+    --load-balancer-arn $(aws elbv2 describe-load-balancers \
+    --region $AGW_AWS_REGION \
+    --query "LoadBalancers[?contains(DNSName, '$(kubectl get service authorservice \
+    -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
+    --output text) \
+    --region $AGW_AWS_REGION \
+    --query "Listeners[0].ListenerArn" \
+    --output text)",
+                "connectionType" : "VPC_LINK"
+                    }
+                    }
+                },
+                "/meta": {
+                    "get": {
+                        "x-amazon-apigateway-integration": {
+                        "uri" : "$(aws elbv2 describe-listeners \
+    --load-balancer-arn $(aws elbv2 describe-load-balancers \
+    --region $AGW_AWS_REGION \
+    --query "LoadBalancers[?contains(DNSName, '$(kubectl get service echoserver \
+    -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
+    --output text) \
+    --region $AGW_AWS_REGION \
+    --query "Listeners[0].ListenerArn" \
+    --output text)",
+                        "httpMethod": "GET",
+                        "connectionId": "$(kubectl get vpclinks.apigatewayv2.services.k8s.aws \
+    nlb-internal \
+    -o jsonpath="{.status.vpcLinkID}")",
+                        "type": "HTTP_PROXY",
+                        "connectionType": "VPC_LINK",
+                        "payloadFormatVersion": "1.0"
+                        }
+                    }
+                    }
+                },
+                "components": {}
+            }'
+    EOF
+
+    kubectl apply -f apigw-api.yaml
+
+```
 
 #### API Gateway - to make the application accessible from the internet ***K8S CRD***
     - Install the ACK for AWS API Gateway using helm
     - Use the service account name for API Gateway created using eksctl
 
-#### NLB (Network Load Balancer) - to route traffic to the Gateway API (Ingress Controller) ***K8S CRD***
-    - Install the ACK for AWS Load Balancer using helm
-    - Use the service account name for API Gateway created using eksctl
 
-#### Gateway API (Cilium implementation) (North/South Trafffic) - accepting traffic into the cluster, create using Helm.
-    - Install Gateway API CRDs
-    - Gateway
-    - HTTPRoute --> Service
+#### Create a stage:
+```bash
 
-#### GAMA East/West Traffic
+    echo "
+    apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+    kind: Stage
+    metadata:
+    name: "apiv1"
+    spec:
+    apiID: $(kubectl get apis.apigatewayv2.services.k8s.aws apitest-private-nlb -o=jsonpath='{.status.apiID}')
+    stageName: api
+    autoDeploy: true
+    " | kubectl apply -f -
+
+    kubectl get api apitest-private-nlb -o jsonpath="{.status.apiEndpoint}"
+
+```
+
