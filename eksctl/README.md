@@ -88,6 +88,12 @@ helm install cilium cilium/cilium --version 1.16.4 \
 ```bash
 kubectl apply -f app/.
 ```
+#### Or deploy app using helm
+
+```bash
+helm install fullstack-app helm-app
+```
+
 
 ## Service Networking
 #### Gateway API (Cilium implementation) (North/South Trafffic) - accepting traffic into the cluster, create using Helm. This creates an NLB (Network Load Balancer) that accepts external traffic
