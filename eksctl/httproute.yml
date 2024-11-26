@@ -6,14 +6,17 @@ spec:
   parentRefs:
   - name: my-gateway
     namespace: default
-  # hostnames:
-  # - "www.example.com"
   rules:
   - matches:
     - path:
         type: PathPrefix
-        value: /
-      method: GET
+        value: /api
+    - method: GET
+    - method: POST
+    - method: PATCH
+    - method: DELETE
     backendRefs:
-    - name: frontend-service
+    - name: backend-service
       port: 80
+      
+
