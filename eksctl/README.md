@@ -90,9 +90,12 @@ helm install cilium cilium/cilium --version 1.16.4 \
 ```
 
 #### Deploy app using Deployment, Service, PVC
-    - The Frontend Service creates an internet facing Classic Load Balancer to expose external traffic to the Service
+    - Create a Persistent Volume or Storage Class for the Persistent Volume Claim.
+    - The Frontend Service creates an internet facing Classic Load Balancer to expose external traffic to the Service.
 
 ```bash
+    kubectl apply -f pv.yml
+    
     kubectl apply -f app/.
 
     kubectl get svc frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
