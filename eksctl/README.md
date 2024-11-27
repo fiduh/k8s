@@ -11,10 +11,12 @@ eksctl create cluster -f cluster.yml
 ```
 
 #### Create pod identity association for Cilium operator service account, giving it the required permissions, aws-load-balancer-controller and ack-apigatewayv2-controller
+[Amazon EKS Pod Identity](https://aws.amazon.com/blogs/containers/amazon-eks-pod-identity-a-new-way-for-applications-on-eks-to-obtain-iam-credentials/)
+
 ```bash
 eksctl create podidentityassociation -f pod-identity.yml
 ```
-Gun
+
 #### Create NodeGroup
 ```bash
 eksctl create nodegroup -f nodegroup.yml
