@@ -106,6 +106,21 @@ helm install cilium cilium/cilium --version 1.16.4 \
     helm install fullstack-app app-chart
 ```
 
+#### Test Backend Connectivity internally
+```bash
+
+    curl -X POST http://backend-service/api/record \
+    -H "Content-Type: application/json" \
+    -d '{
+        "name": "John Doe",
+        "age": 30,
+        "mobile_number": "1234567890",
+        "email": "johndoe@example.com"
+    }'
+
+    kubectl exec -it <frontend-pod-name> -- curl http://backend-service/api/record
+```
+
 
 ## Service Networking
 #### Gateway API (Cilium implementation) (North/South Traffic) - accepting traffic into the cluster, create using Helm. This creates an NLB (Network Load Balancer) that accepts external traffic 
@@ -254,7 +269,7 @@ spec:
   apiRef:
     from:
       name: "${API_NAME}"
-  routeKey: "ANY /"
+  routeKey: "ANY /{proxy+}"
   targetRef:
     from:
       name: "${INTEGRATION_NAME}"
