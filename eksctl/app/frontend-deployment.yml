@@ -45,7 +45,7 @@ metadata:
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing # Makes the LB internet-facing
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector:
     app: frontend
   ports:
