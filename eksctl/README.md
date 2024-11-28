@@ -109,7 +109,7 @@ helm install cilium cilium/cilium --version 1.16.4 \
 #### Test Backend Connectivity internally
 ```bash
 
-    curl -X POST http://backend-service/api/record \
+    kubectl exec -it <frontend-pod-name> -- curl -X POST http://backend-service/api/record \
     -H "Content-Type: application/json" \
     -d '{
         "name": "John Doe",
@@ -199,7 +199,7 @@ EOF
 ```
 
 
-#### Create an AWS API Gateway Route, VPC Link Integration and Stage: - private integration with AWS VPC ***K8S CRD***
+#### Create an AWS HTTP API Gateway Route, VPC Link Integration and Stage: - private integration with AWS VPC ***K8S CRD***
 [Apigatewayv2-reference-example](https://github.com/aws-controllers-k8s/community/blob/main/docs/content/docs/tutorials/apigatewayv2-reference-example.md)
 
 [Manage HTTP APIs with the ACK APIGatewayv2 Controller](https://aws-controllers-k8s.github.io/community/docs/tutorials/apigatewayv2-reference-example/)
@@ -219,7 +219,7 @@ INTEGRATION_URI="$(aws elbv2 describe-listeners \
       --output text)"
 ROUTE_NAME="ack-route"
 ROUTE_KEY_NAME="ack-route-key"
-STAGE_NAME="dev"
+STAGE_NAME="\$default"
 
 cat <<EOF > apigwv2-httpapi.yaml
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
@@ -253,12 +253,7 @@ spec:
   connectionType: VPC_LINK
   connectionID: "$(kubectl get vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')"
   payloadFormatVersion: "1.0"
-  passthroughBehavior: WHEN_NO_MATCH
-  requestParameters:
-    overwrite:path: "/"
-    
-
-
+  
 ---
 
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
@@ -280,7 +275,7 @@ spec:
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Stage
 metadata:
-  name: "${STAGE_NAME}"
+  name: "default"
 spec:
   apiRef:
     from:
