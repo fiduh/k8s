@@ -1,39 +1,3 @@
-# apiVersion: gateway.networking.k8s.io/v1beta1
-# kind: HTTPRoute
-# metadata:
-#   name: frontend-route
-#   namespace: default
-# spec:
-#   parentRefs:
-#   - name: my-gateway
-#   rules:
-#     - matches:
-#         - path:
-#             type: PathPrefix
-#             value: "/"
-#       backendRefs:
-#         - name: frontend-service
-#           port: 80
-# ---
-
-# apiVersion: gateway.networking.k8s.io/v1
-# kind: HTTPRoute
-# metadata:
-#   name: backend-route
-#   namespace: default
-# spec:
-#   parentRefs:
-#   - name: my-gateway
-#   rules:
-#     - matches:
-#         - path:
-#             type: PathPrefix
-#             value: "/api/"
-#       backendRefs:
-#         - name: backend-service
-#           port: 80
-      
-
 
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: HTTPRoute
@@ -50,13 +14,6 @@ spec:
             value: "/api/"
       backendRefs:
         - name: backend-service
-          port: 80
-    - matches:
-        - path:
-            type: PathPrefix
-            value: "/assets/"
-      backendRefs:
-        - name: frontend-service
           port: 80
     - matches:
         - path:
