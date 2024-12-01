@@ -23,17 +23,7 @@ spec:
         - name: VITE_BACKEND_URL
           value: http://backend-service:80 # Reference the backend service
 ---
-# apiVersion: v1
-# kind: Service
-# metadata:
-#   name: frontend-service
-# spec:
-#   selector:
-#     app: frontend
-#   ports:
-#     - protocol: TCP
-#       port: 80
-#       targetPort: 80
+
 
 
 apiVersion: v1
