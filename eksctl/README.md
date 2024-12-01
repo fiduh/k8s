@@ -4,10 +4,12 @@
     - Addons: CoreDNS and eks-pod-identity-agent
 
 ```bash 
-export CLUSTER_NAME=basic-cluster
-export AWS_REGION=us-east-1
+  export CLUSTER_NAME=basic-cluster
+  export AWS_REGION=us-east-1
+```
 
-eksctl create cluster -f cluster.yml
+```bash
+  eksctl create cluster -f cluster.yml
 ```
 
 #### Create pod identity association for Cilium operator service account, giving it the required permissions, aws-load-balancer-controller and ack-apigatewayv2-controller
