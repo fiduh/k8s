@@ -42,8 +42,8 @@ metadata:
   name: frontend-service
   labels:
     app: frontend
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing # Makes the LB internet-facing
+  # annotations:
+  #   service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing # Makes the LB internet-facing
 spec:
   type: ClusterIP
   selector:
