@@ -1,15 +1,25 @@
-#### Prerequisite: Install eksct, kubectl, aws-cli
+## Architecture:
+
+#### Prerequisite: Install eksctl, kubectl, aws-cli
 
 #### Create Kubernetes Cluster with EKSCTL
-    - Addons: CoreDNS and eks-pod-identity-agent
+  - Addons: CoreDNS and eks-pod-identity-agent
 
 ```bash 
-  export CLUSTER_NAME=basic-cluster
-  export AWS_REGION=us-east-1
+export CLUSTER_NAME=basic-cluster
+export AWS_REGION=us-east-1
 ```
 
 ```bash
-  eksctl create cluster -f cluster.yml
+eksctl create cluster -f cluster.yml
+```
+## OR
+
+#### Create Kubernetes Cluster with EKSCTL in Auto Mode
+  - When you create a cluster using Auto-Mode you don't need enable pod-identity as it's done automatically.
+  - Other Addons (CoreDNS, VPC-CNI, Kube Proxy etc.) are also added automatically as part of the EKS process. 
+```bash
+eksctl create cluster -f auto-mode-cluster.yml
 ```
 
 #### Create pod identity association for Cilium operator service account, giving it the required permissions, aws-load-balancer-controller and ack-apigatewayv2-controller
@@ -20,6 +30,8 @@ eksctl create podidentityassociation -f pod-identity.yml
 ```
 
 #### Create NodeGroup
+  - AMI is BottleRocket
+  - Taint the Nodes (application pods are not scheduled/executed until Cilium is deployed)
 ```bash
 eksctl create nodegroup -f nodegroup.yml
 ```
@@ -29,34 +41,34 @@ eksctl create nodegroup -f nodegroup.yml
 
 ```bash
 
-    - ## Get EKS cluster VPC ID
-    export AGW_VPC_ID=$(aws eks describe-cluster \
-    --name $CLUSTER_NAME \
-    --region $AWS_REGION  \
-    --query "cluster.resourcesVpcConfig.vpcId" \
-    --output text)
+## Get EKS cluster VPC ID
+export AGW_VPC_ID=$(aws eks describe-cluster \
+--name $CLUSTER_NAME \
+--region $AWS_REGION  \
+--query "cluster.resourcesVpcConfig.vpcId" \
+--output text)
 
-    helm repo add eks https://aws.github.io/eks-charts && helm repo update eks
+helm repo add eks https://aws.github.io/eks-charts && helm repo update eks
 
-    helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
-    -n kube-system \
-    --set clusterName=$CLUSTER_NAME \
-    --set serviceAccount.create=false \
-    --set serviceAccount.name=aws-load-balancer-controller \
-    --set region=$AWS_REGION \
-    --set vpcId=$AGW_VPC_ID
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+-n kube-system \
+--set clusterName=$CLUSTER_NAME \
+--set serviceAccount.create=false \
+--set serviceAccount.name=aws-load-balancer-controller \
+--set region=$AWS_REGION \
+--set vpcId=$AGW_VPC_ID
 
-    kubectl get deployment -n kube-system aws-load-balancer-controller
+kubectl get deployment -n kube-system aws-load-balancer-controller
 ```
 
 #### Install Cilium CNI on the cluster using helm and replace Kube-proxy.
 [Helm install Cilium docs](https://docs.cilium.io/en/stable/installation/k8s-install-helm/)
 
-# You can install Cilium in either ENI mode or Overlay mode on an EKS cluster.
-    - In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI, so the aws-node DaemonSet has to be patched to prevent conflict behavior.
+#### You can install Cilium in either ENI mode or Overlay mode on an EKS cluster.
+ - In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI, so the aws-node DaemonSet has to be patched to prevent conflict behavior.
     - set your API_SERVER_IP and API_SERVER_PORT by using `kubectl cluster-info`
 
-# Before we install Cilium with Gateway API, we need to make sure we install the Gateway API CRDs
+#### Before we install Cilium with Gateway API, we need to make sure we install the Gateway API CRDs
 [Install standard channels crds](https://gateway-api.sigs.k8s.io/guides/?h=crds#getting-started-with-gateway-api)
 
 ```bash
@@ -87,53 +99,66 @@ helm install cilium cilium/cilium --version 1.16.4 \
   --set gatewayAPI.enabled=true 
 
 
-  kubectl get gatewayclasses.gateway.networking.k8s.io cilium
+kubectl get gatewayclasses.gateway.networking.k8s.io cilium
 
 ```
 
 #### Deploy app using Deployment, Service, PVC
-    - Create a Persistent Volume or Storage Class for the Persistent Volume Claim.
-    - The Frontend Service creates an internet facing Classic Load Balancer to expose external traffic to the Service.
+  - Create a Persistent Volume or Storage Class for the Persistent Volume Claim.
+  - The Frontend Service creates an internet facing Classic Load Balancer to expose external traffic to the Service.
+  - Use ConfigMaps to pass configuration data to the deployments.
 
 ```bash
-    kubectl apply -f pv.yml
-    
-    kubectl apply -f app/.
+kubectl apply -f pv.yml
 
-    kubectl get svc frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+kubectl apply -f app/.
+
+kubectl get svc frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 ```
 #### Or deploy app using helm
 
 ```bash
-    helm install fullstack-app app-chart
+helm install fullstack-app app-chart
 ```
 
 #### Test Backend Connectivity internally
 ```bash
 
-    kubectl exec -it <frontend-pod-name> -- curl -X POST http://backend-service/api/record \
-    -H "Content-Type: application/json" \
-    -d '{
-        "name": "John Doe",
-        "age": 30,
-        "mobile_number": "1234567890",
-        "email": "johndoe@example.com"
-    }'
+kubectl exec -it <frontend-pod-name> -- curl -X POST http://backend-service/api/record \
+-H "Content-Type: application/json" \
+-d '{
+    "name": "John Doe",
+    "age": 30,
+    "mobile_number": "1234567890",
+    "email": "johndoe@example.com"
+}'
 
-    kubectl exec -it <frontend-pod-name> -- curl http://backend-service/api/record
+kubectl exec -it <frontend-pod-name> -- curl http://backend-service/api/record
 ```
 
 
-## Service Networking
+#### Service Networking
 #### Gateway API (Cilium implementation) (North/South Traffic) - accepting traffic into the cluster, create using Helm. This creates an NLB (Network Load Balancer) that accepts external traffic 
-    - GatewayClass, deployed when cilium is been installed (gatewayAPI.enabled=true)
-    - Gateway
-    - HTTPRoute --> Service
+  - GatewayClass, deployed when cilium is been installed (gatewayAPI.enabled=true)
+  - Gateway
+  - HTTPRoute --> Service
 
 ```bash
 kubectl apply -f gateway.yml
 
 kubectl apply -f httproute.yml
+```
+## OR
+
+#### [Create an IngressClass to configure an Application Load Balancer](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html)
+
+```bash
+kubectl apply -f ingress-class-params.yml
+kubectl apply -f ingress-class.yml
+kubectl apply -f ingress.yml
+
+## Check Status
+kubectl get ingress
 ```
 
 
@@ -145,30 +170,30 @@ kubectl apply -f httproute.yml
 *You can use the Helm CLI to log into the ECR public Helm registry and install the chart.*
 
 ```bash
-    export ACK_SYSTEM_NAMESPACE=kube-system
-    export SERVICE=apigatewayv2
-    export RELEASE_VERSION=$(curl -sL https://api.github.com/repos/aws-controllers-k8s/${SERVICE}-controller/releases/latest | jq -r '.tag_name | ltrimstr("v")')
-    export AWS_REGION=us-east-1
-    export CHART_REPO=oci://public.ecr.aws/aws-controllers-k8s
+export ACK_SYSTEM_NAMESPACE=kube-system
+export SERVICE=apigatewayv2
+export RELEASE_VERSION=$(curl -sL https://api.github.com/repos/aws-controllers-k8s/${SERVICE}-controller/releases/latest | jq -r '.tag_name | ltrimstr("v")')
+export AWS_REGION=us-east-1
+export CHART_REPO=oci://public.ecr.aws/aws-controllers-k8s
 
-    aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
+aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
 
 
-    helm install --create-namespace -n $ACK_SYSTEM_NAMESPACE ack-$SERVICE-controller \
-  $CHART_REPO/$SERVICE-chart --version $RELEASE_VERSION --set=aws.region=$AWS_REGION
+helm install --create-namespace -n $ACK_SYSTEM_NAMESPACE ack-$SERVICE-controller \
+$CHART_REPO/$SERVICE-chart --version $RELEASE_VERSION --set=aws.region=$AWS_REGION
 
 ```
 
-## Create API Gateway resources - handling North/South Traffic
-    - Create security group for the VPC link:
+#### Create API Gateway resources - handling North/South Traffic
+  - Create security group for the VPC link:
 ```bash
-    AGW_VPCLINK_SG=$(aws ec2 create-security-group \
-    --description "SG for VPC Link" \
-    --group-name SG_VPC_LINK \
-    --vpc-id $AGW_VPC_ID \
-    --region $AWS_REGION \
-    --output text \
-    --query 'GroupId')
+AGW_VPCLINK_SG=$(aws ec2 create-security-group \
+--description "SG for VPC Link" \
+--group-name SG_VPC_LINK \
+--vpc-id $AGW_VPC_ID \
+--region $AWS_REGION \
+--output text \
+--query 'GroupId')
 
 ```
 
@@ -195,9 +220,9 @@ spec:
           --region $AWS_REGION --output text)
 EOF
 
-    kubectl apply -f vpc-link.yaml
+kubectl apply -f vpc-link.yaml
 
-    aws apigatewayv2 get-vpc-links --region $AWS_REGION
+aws apigatewayv2 get-vpc-links --region $AWS_REGION
 ```
 
 
@@ -287,9 +312,9 @@ spec:
   description: "auto deployed stage for ${API_NAME}"
 EOF
 
-    kubectl apply -f apigwv2-httpapi.yaml
+kubectl apply -f apigwv2-httpapi.yaml
 
-    kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}'
+kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}'
 
 ```
 
