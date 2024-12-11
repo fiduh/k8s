@@ -2,7 +2,7 @@
 
 #### Horizontal Pod Autoscaling (HPA)
 
-#### Vertical Pod Autoscaling (VPA)
+#### Vertical Pod Autoscaling (VPA) and Right Sizing 
 
 #### KEDA
 
