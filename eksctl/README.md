@@ -1,4 +1,13 @@
 ## Architecture:
+  - *Create an EKS Cluster using Auto mode or manually*
+  - *Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
+  Note: these are deployed automatically as Systemd processes when using Auto Mode.*
+  - Implement North/South Traffic into the cluster using HTTP API Gateway, VPC Private Link, NLB, Gateway, Route or Ingress.
+  - AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs)
+  - Implement persistent storage using the CSI drivers
+  - Deploy a sample fullstack app with a Frontend, Backend and Database to test the cluster.
+
+  ![Integration](../images/AWS_EKS.png)
 
 #### Prerequisite: Install eksctl, kubectl, aws-cli
 
@@ -17,7 +26,7 @@ eksctl create cluster -f cluster.yml
 
 #### Create Kubernetes Cluster with EKSCTL in Auto Mode
   - When you create a cluster using Auto-Mode you don't need enable pod-identity as it's done automatically.
-  - Other Addons (CoreDNS, VPC-CNI, Kube Proxy etc.) are also added automatically as part of the EKS process. 
+  - Other Addons (CoreDNS, VPC-CNI, Kube Proxy etc.) are also added automatically as systemd processess. 
 ```bash
 eksctl create cluster -f auto-mode-cluster.yml
 ```
