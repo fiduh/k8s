@@ -145,7 +145,6 @@ kubectl exec -it <frontend-pod-name> -- curl -X POST http://backend-service/api/
 kubectl exec -it <frontend-pod-name> -- curl http://backend-service/api/record
 ```
 
-
 #### Service Networking
 #### Gateway API (Cilium implementation) (North/South Traffic) - accepting traffic into the cluster, create using Helm. This creates an NLB (Network Load Balancer) that accepts external traffic 
   - GatewayClass, deployed when cilium is been installed (gatewayAPI.enabled=true)
@@ -162,14 +161,11 @@ kubectl apply -f httproute.yml
 #### [Create an IngressClass to configure an Application Load Balancer](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html)
 
 ```bash
-kubectl apply -f ingress-class-params.yml
-kubectl apply -f ingress-class.yml
-kubectl apply -f ingress.yml
+kubectl apply -f ingress/.
 
 ## Check Status
 kubectl get ingress
 ```
-
 
 
 #### Deploy ACK Controller for API Gateway
