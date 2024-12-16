@@ -21,7 +21,10 @@ spec:
         - containerPort: 80
         env:
         - name: VITE_BACKEND_URL
-          value: http://backend-service:80 # Reference the backend service
+          valueFrom: # Reference the backend service
+            configMapKeyRef:
+              name: appconf
+              key: VITE_BACKEND_URL
 ---
 
 
