@@ -19,9 +19,16 @@ spec:
         - containerPort: 80
         env:
         - name: MONGO_URI
-          value: "mongodb://mongo-service:27017/learn_k8"
+          valueFrom:
+            configMapKeyRef:
+              name: appconf
+              key: MONGO_URI
         - name: PORT
-          value: ":80"
+          valueFrom:
+            configMapKeyRef:
+              name: appconf
+              key: PORT
+
 ---
 apiVersion: v1
 kind: Service
