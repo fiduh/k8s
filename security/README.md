@@ -53,9 +53,88 @@ OSI Layer 3&4 Network rules using IP Addresses and Ports, It's a builtin kuberne
 It sets rules for Pods to communicate, these are strict rules for inter cluster communication.***
 
 Senario we are solving for.
- - FRONTEND send ingress traffic to WORKER, WORKER can receive ingress traffic from only FRONTEND and send ingress traffic to DATABASE, DATABASE can receive ingress traffic from only WORKER and block all egress traffic. 
+ - The FRONTEND sends ingress traffic to the WORKER. The WORKER can receive ingress traffic only from the FRONTEND and send ingress traffic to the DATABASE. The DATABASE can receive ingress traffic only from the WORKER and block all egress traffic. 
 
 [Use Network Policies with EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-net-pol.html)
+
+```bash
+# Fetch the VPC ID and CIDR block dynamically
+export VPC_ID=$(aws eks describe-cluster --name <your-cluster-name> --query "cluster.resourcesVpcConfig.vpcId" --output text)
+CIDR=$(aws ec2 describe-vpcs --vpc-ids $VPC_ID --query "Vpcs[0].CidrBlock" --output text)
+```
+
+```bash
+    # Create or modify your Frontend NetworkPolicy YAML with the dynamically fetched CIDR
+
+cat <<EOF > network-policy/frontend-network-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-network-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: $CIDR
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: backend
+    ports:
+    - protocol: TCP
+      port: 80
+EOF
+```
+
+```bash
+    #Create or modify your Backend NetworkPolicy YAML with the dynamically fetched CIDR
+
+cat <<EOF > network-policy/backend-network-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-network-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: $CIDR
+    - podSelector:
+        matchLabels:
+          app: frontend
+    ports:
+    - protocol: TCP
+      port: 80
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: mongo
+    ports:
+    - protocol: TCP
+      port: 27017
+EOF
+```
 
 
  ```bash
