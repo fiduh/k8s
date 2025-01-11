@@ -1,17 +1,17 @@
 ## Architecture:
-  - *Create an EKS Cluster using Auto mode or manually*
+  - *Create an EKS Cluster using Auto mode or Standard Mode*
   - *Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
-  Note: these are deployed automatically as Systemd processes when using Auto Mode.*
-  - Implement North/South Traffic into the cluster using HTTP API Gateway, VPC Private Link, NLB, Gateway, Route or Ingress.
+  Note: these are deployed automatically as system processes when using Auto Mode.*
+  - Implement North/South Traffic into the cluster using HTTP API Gateway, VPC Private Link, NLB, Gateway API, Route or Ingress.
   - AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs)
-  - Implement persistent storage using the CSI drivers
-  - Deploy a sample fullstack app with a Frontend, Backend and Database to test the cluster.
+  - Implement persistent storage using the CSI drivers (only when auto mode is not been used).
+  - Deploy a sample fullstack app with a Frontend, Backend and Database in segregatted namespaces to test the cluster.
 
   ![Integration](../images/AWS_EKS.png)
 
 #### Prerequisite: Install eksctl, kubectl, aws-cli
 
-#### Create Kubernetes Cluster with EKSCTL
+#### Create Kubernetes Cluster with EKSCTL - Standard Mode
   - Addons: CoreDNS and eks-pod-identity-agent
 
 ```bash 
@@ -31,13 +31,14 @@ eksctl create cluster -f cluster.yml
 eksctl create cluster -f auto-mode-cluster.yml
 ```
 
-#### Create pod identity association for Cilium operator service account, giving it the required permissions, aws-load-balancer-controller and ack-apigatewayv2-controller
+#### Create pod identity association for Cilium operator service account, giving it the required permissions, aws-load-balancer-controller and ack-apigatewayv2-controller (Not required when Auto mode is enabled).
 [Amazon EKS Pod Identity](https://aws.amazon.com/blogs/containers/amazon-eks-pod-identity-a-new-way-for-applications-on-eks-to-obtain-iam-credentials/)
 
 ```bash
 eksctl create podidentityassociation -f pod-identity.yml
 ```
 
+#### Create NodeGroups using Karpenter
 #### Create NodeGroup
   - AMI is BottleRocket
   - Taint the Nodes (application pods are not scheduled/executed until Cilium is deployed)
@@ -45,7 +46,7 @@ eksctl create podidentityassociation -f pod-identity.yml
 eksctl create nodegroup -f nodegroup.yml
 ```
 
-#### Deploy the AWS Load Balancer Controller
+#### Deploy the AWS Load Balancer Controller (Not required while using Auto Mode)
 [Install ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
 
 ```bash
@@ -70,7 +71,7 @@ helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
 kubectl get deployment -n kube-system aws-load-balancer-controller
 ```
 
-#### Install Cilium CNI on the cluster using helm and replace Kube-proxy.
+#### Install Cilium CNI on the cluster using helm and replace Kube-proxy. (Not required while using Auto Mode)
 [Helm install Cilium docs](https://docs.cilium.io/en/stable/installation/k8s-install-helm/)
 
 #### You can install Cilium in either ENI mode or Overlay mode on an EKS cluster.
@@ -111,6 +112,8 @@ helm install cilium cilium/cilium --version 1.16.4 \
 kubectl get gatewayclasses.gateway.networking.k8s.io cilium
 
 ```
+
+#### Deploy OCI Controllers (Not rquired while using EKS Auto Mode).
 
 #### Deploy app using Deployment, Service, PVC
   - Create a Persistent Volume or Storage Class for the Persistent Volume Claim.
