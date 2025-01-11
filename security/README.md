@@ -39,10 +39,17 @@ The labels you select define what action the PSA takes if a potential violation 
 
 
 #### Network Policy
+#### Default Deny Directional Network traffic at the namespace level.
+ - Principle of least privilege: Pods should communicate with lowest privilege for network communication.
+ - Start by disallowing traffic in any direction and then opening up the traffic needed by the application architecture. 
+
 [Network Policy Editor by - ISOVALENT](https://editor.networkpolicy.io/)
 OSI Layer 3&4 Network rules using IP Addresses and Ports, It's a builtin kubernetes feature, but it's implementation part of it lies in the CNI which is installed in your cluster. A CNI like Cilium gives you the capabilitie to create custom resources to control layer 7 (HTTP) traffic.
 
  ```bash
+ # Default deny ally traffic at each name space level.
+ kubectl apply -f deny-all-ingress-network-policy.yaml
+ 
  kubectl get networkpolicies -A
  ```
 
