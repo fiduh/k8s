@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend-deployment
+  namespace: go-ui
   labels:
     app: frontend
 spec:
@@ -16,7 +17,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: sahildhingraa/learn-k8-frontend:latest
+        image: acekloudnative/go-3-tier-app-ui:v0.1.0
         ports:
         - containerPort: 80
         env:
@@ -33,6 +34,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend-service
+  namespace: go-ui
   labels:
     app: frontend
   # annotations:
