@@ -115,6 +115,14 @@ kubectl get gatewayclasses.gateway.networking.k8s.io cilium
 
 #### Deploy OCI Controllers (Not rquired while using EKS Auto Mode).
 
+#### Create a namespace to isolate the application
+ - For a namespace that implements Pod Security Standards checkout:
+ - [Kubernetes Security Section](./security/README.md)
+
+```bash
+kubectl apply -f namespaces/go-3tier-app.yml
+```
+
 #### Deploy app using Deployment, Service, PVC
   - Create a Persistent Volume or Storage Class for the Persistent Volume Claim.
   - The Frontend Service creates an internet facing Classic Load Balancer to expose external traffic to the Service.
