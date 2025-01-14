@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: minimal-ingress
-  namespace: go-ingress
+  namespace: go-3tier-app
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     # Use AWS ALB
@@ -15,15 +15,15 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: backend-service.go-backend
+                name: backend-service
                 port:
-                  number: 80
+                  number: 8080
     - http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: frontend-service.go-ui
+                name: frontend-service
                 port:
-                  number: 80
+                  number: 8080
