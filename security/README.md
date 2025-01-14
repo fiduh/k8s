@@ -102,7 +102,7 @@ spec:
           app: backend
     ports:
     - protocol: TCP
-      port: 80
+      port: 8080
 EOF
 ```
 
@@ -131,7 +131,7 @@ spec:
           app: frontend
     ports:
     - protocol: TCP
-      port: 80
+      port: 8080
   egress:
   - to:
     - podSelector:
