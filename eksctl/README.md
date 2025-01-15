@@ -1,18 +1,19 @@
 ## Architecture:
   - *Create an EKS Cluster using Auto mode or Standard Mode*
+  - Key considerations while using either of the two Modes
   - *Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
   Note: these are deployed automatically as system processes when using Auto Mode.*
-  - Implement North/South Traffic into the cluster using HTTP API Gateway, VPC Private Link, NLB, Gateway API, Route or Ingress.
-  - AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs)
   - Implement persistent storage using the CSI drivers (only when auto mode is not been used).
   - Deploy a sample fullstack app with a Frontend, Backend and Database in segregatted namespaces to test the cluster.
-
+  - Route ingress (North/South) Traffic into the cluster using HTTP API Gateway, VPC Private Link, NLB, Gateway API, Route or Ingress.
+  - AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs)
+  
   ![Integration](../images/AWS_EKS.png)
 
 #### Prerequisite: Install eksctl, kubectl, aws-cli
 
 #### Create Kubernetes Cluster with EKSCTL - Standard Mode
-  - Addons: CoreDNS and eks-pod-identity-agent
+  - Addons: CoreDNS, EBS CSI Driver and eks-pod-identity-agent
 
 ```bash 
 export CLUSTER_NAME=basic-cluster
@@ -26,7 +27,8 @@ eksctl create cluster -f cluster.yml
 
 #### Create Kubernetes Cluster with EKSCTL in Auto Mode
   - When you create a cluster using Auto-Mode you don't need enable pod-identity as it's done automatically.
-  - Other Addons (CoreDNS, VPC-CNI, Kube Proxy etc.) are also added automatically as systemd processess. 
+  - Other Addons (CoreDNS, VPC-CNI, Kube Proxy etc.) are also added automatically as systemd processess.
+  - This service will set you back an additional 12% on top of the standard on-demand EC2 instance pricing for the data plane. That means an additional 12% cost for every instance running in EKS Auto Mode. AWS Auto Mode prices are not affected by instance discounts from Spot, RI, Savings plans ect. You pay for the management of the compute resources provisioned, in addition to your regular EC2 costs. 
 ```bash
 eksctl create cluster -f auto-mode-cluster.yml
 ```
@@ -38,13 +40,15 @@ eksctl create cluster -f auto-mode-cluster.yml
 eksctl create podidentityassociation -f pod-identity.yml
 ```
 
-#### Create NodeGroups using Karpenter
+#### Deploy Managed NodeGroups.
 #### Create NodeGroup
   - AMI is BottleRocket
   - Taint the Nodes (application pods are not scheduled/executed until Cilium is deployed)
 ```bash
 eksctl create nodegroup -f nodegroup.yml
 ```
+
+#### Create NodePool and NodeClass using Karpenter
 
 #### Deploy the AWS Load Balancer Controller (Not required while using Auto Mode)
 [Install ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
@@ -113,8 +117,6 @@ kubectl get gatewayclasses.gateway.networking.k8s.io cilium
 
 ```
 
-#### Deploy OCI Controllers (Not rquired while using EKS Auto Mode).
-
 #### Create a namespace to isolate the application
  - For a namespace that implements Pod Security Standards checkout:
  - [Kubernetes Security Section](./security/README.md)
@@ -123,14 +125,70 @@ kubectl get gatewayclasses.gateway.networking.k8s.io cilium
 kubectl apply -f namespaces/go-3tier-app.yml
 ```
 
+#### Deploy EBS CSI Driver (Not rquired while using EKS Auto Mode).
+ - This is already added as an addon during cluster creation.
+
+ ```bash
+ # Get default storage class
+ kubectl get storageclass
+
+# Create a Storage Class
+
+# StorageClass when using Auto Mode
+cat <<EOF > storage-class-auto.yaml
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: auto-ebs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.eks.amazonaws.com
+parameters:
+  type: gp3                 # Specifies the volume type (gp3)
+  fsType: ext4              # Filesystem type  
+  iops: "3000"              # Configurable IOPS (min: 3000, max: 16000)
+  throughput: "125"         # Throughput in MiB/s (max: 1000 for gp3)   
+volumeBindingMode: WaitForFirstConsumer
+EOF
+
+kubectl apply -f storage-class-auto.yaml
+
+kubectl get storageclass
+
+# StorageClass when using Standard Mode
+
+ ```
+
+ # Create a PersistentVolumeClaim 
+
+ ```bash
+cat <<EOF > mongo-pvc.yaml
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mongo-pvc
+  namespace: go-3tier-app
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: auto-ebs-sc
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+kubectl apply -f mongo-pvc.yaml
+
+kubectl get pvc
+ ```
+
+
+
 #### Deploy app using Deployment, Service, PVC
   - Create a Persistent Volume or Storage Class for the Persistent Volume Claim.
-  - The Frontend Service creates an internet facing Classic Load Balancer to expose external traffic to the Service.
   - Use ConfigMaps to pass configuration data to the deployments.
 
 ```bash
-kubectl apply -f pv.yml
-
 kubectl apply -f app/.
 
 kubectl get svc frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
@@ -170,6 +228,7 @@ kubectl apply -f httproute.yml
 ## OR
 
 #### [Create an IngressClass to configure an Application Load Balancer](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html)
+#### Recommended when using auto mode, because the aws vpc cni is backed in as a systemd process and can't be changed to Cilium CNI.
 
 ```bash
 kubectl apply -f ingress/.
