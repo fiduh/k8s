@@ -13,22 +13,40 @@ spec:
       labels:
         app: mongo
     spec:
+      securityContext: 
+        seccompProfile:
+          type: RuntimeDefault
+        runAsUser: 1002
+        runAsGroup: 3002 
+        fsGroup: 2002 
+        runAsNonRoot: true
       containers:
       - name: mongo
-        image: mongo:latest
+        image: mongodb/mongodb-community-server:8.0-ubuntu2204
+        args: ["--unixSocketPrefix", "/data/db/tmp"]
         ports:
         - containerPort: 27017
         volumeMounts:
         - name: mongo-storage
           mountPath: /data/db
+        - name: mongo-storage
+          mountPath: /data/db/tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          privileged: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
       volumes:
-      - name: mongo-storage
-        hostPath:
-          path: /tmp/mongo-data  # Replace with a suitable path
-          type: DirectoryOrCreate
       # - name: mongo-storage
-      #   persistentVolumeClaim:
-      #     claimName: mongo-pvc
+      #   hostPath:
+      #     path: /tmp/mongo-data  # Replace with a suitable path
+      #     type: DirectoryOrCreate
+      - name: mongo-storage
+        persistentVolumeClaim:
+          claimName: mongo-pvc
+      
 ---
 apiVersion: v1
 kind: Service
