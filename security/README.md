@@ -48,7 +48,20 @@ OSI Layer 3&4 Network rules using IP Addresses and Ports, It's a builtin kuberne
 
  ```bash
  # Default deny ally traffic at each name space level.
- kubectl apply -f deny-all-ingress-network-policy.yaml
+cat <<EOF > network-policy/deny-all-network-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: go-3tier-app
+spec:
+  podSelector: {}  # This selects all pods in the namespace
+  policyTypes:
+    - Ingress  # Deny all incoming traffic
+    - Egress   # Deny all outgoing traffic
+EOF
+
+ kubectl apply -f network-policy/deny-all-network-policy.yaml
  
  kubectl get networkpolicies -A
  ```
@@ -78,7 +91,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: frontend-network-policy
-  namespace: default
+  namespace: go-3tier-app
 spec:
   podSelector:
     matchLabels:
@@ -114,7 +127,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: backend-network-policy
-  namespace: default
+  namespace: go-3tier-app
 spec:
   podSelector:
     matchLabels:
