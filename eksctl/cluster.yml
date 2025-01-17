@@ -11,9 +11,14 @@ addonsConfig:
   disableDefaultAddons: true
   autoApplyPodIdentityAssociations: true
 
-# Cilium addon(Cluster CNI), CoreDNS
+# EKS Pod Identity agent addon, CoreDNS, EBS CSI Driver
 addons: 
   - name: eks-pod-identity-agent
-    useDefaultPodIdentityAssociations: true
+    # useDefaultPodIdentityAssociations: true
   - name: coredns
-    useDefaultPodIdentityAssociations: true
+    # useDefaultPodIdentityAssociations: true
+  - name: aws-ebs-csi-driver
+    version: latest
+    wellKnownPolicies:      # add IAM and service account
+      ebsCSIController: true
+    # useDefaultPodIdentityAssociations: true
