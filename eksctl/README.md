@@ -307,6 +307,7 @@ aws apigatewayv2 get-vpc-links --region $AWS_REGION
 [Manage HTTP APIs with the ACK APIGatewayv2 Controller](https://aws-controllers-k8s.github.io/community/docs/tutorials/apigatewayv2-reference-example/)
 
 ```bash
+# Integration uri should either be for ingress(recommened when using auto mode) or gateway
 
 API_NAME="ack-api"
 INTEGRATION_NAME="private-nlb-integration"
