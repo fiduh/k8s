@@ -30,6 +30,25 @@ The labels you select define what action the PSA takes if a potential violation 
  #  PSA and PSS Namespace configurations
  #  pod-security.kubernetes.io/<MODE>: <LEVEL>
 
+cat <<EOF > pss/psa-default.yml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: go-3tier-app
+  labels:    
+    # pod-security.kubernetes.io/enforce: privileged
+    # pod-security.kubernetes.io/audit: privileged
+    # pod-security.kubernetes.io/warn: privileged
+    
+    # pod-security.kubernetes.io/enforce: baseline
+    # pod-security.kubernetes.io/audit: baseline
+    # pod-security.kubernetes.io/warn: baseline
+    
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+EOF
+
  kubectl apply -f pss/psa-default.yml
  ```
 > [!NOTE]
@@ -38,13 +57,34 @@ The labels you select define what action the PSA takes if a potential violation 
 *As an alternative to PSA, you can use Policy-as-Code (PaC) open-sourse solutions.*
 
 
-#### Network Policy
-#### Default Deny Directional Network traffic at the namespace level.
- - Principle of least privilege: Pods should communicate with lowest privilege for network communication.
- - Start by disallowing traffic in any direction and then opening up the traffic needed by the application architecture. 
+#### Implement Network Policy
 
 [Network Policy Editor by - ISOVALENT](https://editor.networkpolicy.io/)
 OSI Layer 3&4 Network rules using IP Addresses and Ports, It's a builtin kubernetes feature, but it's implementation part of it lies in the CNI which is installed in your cluster. A CNI like Cilium gives you the capabilitie to create custom resources to control layer 7 (HTTP) traffic.
+
+#### When using auto mode, enable Newtwork policy using Config Maps, in Standard mode this is however implementd by the CNI that's deloyed on the cluster.
+[Use Network Policies with EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-net-pol.html)
+
+```bash
+
+cat <<EOF > network-policy/enable-network-policy.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amazon-vpc-cni
+  namespace: kube-system
+data:
+  enable-network-policy-controller: "true"
+EOF
+
+kubectl apply -f network-policy/enable-network-policy.yaml
+kubectl get configmap amazon-vpc-cni -n kube-system
+
+```
+
+#### Default Deny Directional Network traffic at the namespace level.
+ - Principle of least privilege: Pods should communicate with lowest privilege for network communication.
+ - Start by disallowing traffic in any direction and then opening up the traffic needed by the application architecture. 
 
  ```bash
  # Default deny ally traffic at each name space level.
@@ -75,7 +115,7 @@ It sets rules for Pods to communicate, these are strict rules for inter cluster 
 Senario we are solving for.
  - The FRONTEND sends ingress traffic to the WORKER. The WORKER can receive ingress traffic only from the FRONTEND and send ingress traffic to the DATABASE. The DATABASE can receive ingress traffic only from the WORKER and block all egress traffic. 
 
-[Use Network Policies with EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-net-pol.html)
+
 
 ```bash
 # Fetch the VPC ID and CIDR block dynamically
@@ -102,7 +142,7 @@ spec:
   ingress:
   - from:
     - ipBlock:
-        cidr: $CIDR
+        cidr: $CIDR   
     ports:
     - protocol: TCP
       port: 80
@@ -117,6 +157,10 @@ spec:
     - protocol: TCP
       port: 8080
 EOF
+
+kubectl apply -f network-policy/frontend-network-policy.yaml
+kubectl get np frontend-network-policy -n go-3tier-app
+
 ```
 
 ```bash
@@ -138,7 +182,7 @@ spec:
   ingress:
   - from:
     - ipBlock:
-        cidr: $CIDR
+        cidr: $CIDR   
     - podSelector:
         matchLabels:
           app: frontend
@@ -154,13 +198,40 @@ spec:
     - protocol: TCP
       port: 27017
 EOF
+
+kubectl apply -f network-policy/backend-network-policy.yaml
+kubectl get np backend-network-policy -n go-3tier-app
+
 ```
 
 
  ```bash
- # Enable Network Policy Controller
 
- kubectl apply -f network-policy/.
+cat <<EOF > network-policy/database-network-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: database-network-policy
+  namespace: go-3tier-app
+spec:
+  podSelector:
+    matchLabels:
+      app: mongo
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: backend
+    ports:
+    - protocol: TCP
+      port: 27017
+EOF 
 
- kubectl exec <PodName> -- sh -c 'nc -v <PodIP PORT>'
+kubectl apply -f network-policy/database-network-policy.yaml
+kubectl get np database-network-policy -n go-3tier-app
+
+kubectl exec <PodName> -- sh -c 'nc -v <PodIP PORT>'
+
  ```
