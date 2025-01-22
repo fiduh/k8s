@@ -1,0 +1,1 @@
+#### Automate the TLS Encryption of ingress traffic within the cluster using Certbot and LetsEncrypt.
