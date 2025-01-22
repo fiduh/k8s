@@ -14,11 +14,11 @@ spec:
             value: "/api/"
       backendRefs:
         - name: backend-service
-          port: 80
+          port: 8080
     - matches:
         - path:
             type: PathPrefix
             value: "/"
       backendRefs:
         - name: frontend-service
-          port: 80
+          port: 8080
