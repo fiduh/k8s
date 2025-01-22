@@ -4,8 +4,8 @@
   - *Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
   Note: these are deployed automatically as system processes when using Auto Mode.*
   - Implement persistent storage using the CSI drivers (only when auto mode is not been used).
-  - Deploy a sample fullstack app with a Frontend, Backend and Database in segregatted namespaces to test the cluster.
-  - Route ingress (North/South) Traffic into the cluster using HTTP API Gateway, VPC Private Link, NLB, Gateway API, Route or Ingress.
+  - Deploy a sample fullstack app with a Frontend, Backend and Database in a segregatted namespace to test the cluster.
+  - Securely expose microservices running in the cluster to external traffic using HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API, Route or Ingress.
   - AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs)
   
   ![Integration](../images/AWS_EKS.png)
@@ -54,7 +54,6 @@ eksctl create nodegroup -f nodegroup.yml
 [Install ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
 
 ```bash
-
 ## Get EKS cluster VPC ID
 export AGW_VPC_ID=$(aws eks describe-cluster \
 --name $CLUSTER_NAME \
@@ -86,7 +85,6 @@ kubectl get deployment -n kube-system aws-load-balancer-controller
 [Install standard channels crds](https://gateway-api.sigs.k8s.io/guides/?h=crds#getting-started-with-gateway-api)
 
 ```bash
-
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
 
 
@@ -185,7 +183,6 @@ kubectl get pvc
 
 
 #### Deploy app using Deployment, Service, PVC
-  - Create a Persistent Volume or Storage Class for the Persistent Volume Claim.
   - Use ConfigMaps to pass configuration data to the deployments.
 
 ```bash
@@ -234,7 +231,7 @@ kubectl apply -f httproute.yml
 kubectl apply -f ingress/.
 
 ## Check Status
-kubectl get ingress
+kubectl get ingress -n go-3tier-app
 ```
 
 
@@ -259,6 +256,40 @@ $CHART_REPO/$SERVICE-chart --version $RELEASE_VERSION --set=aws.region=$AWS_REGI
 
 ```
 
+#### Create IAM Role for ACKApiGatewayV2ControllerRole
+```bash
+aws iam create-role \
+  --role-name ACKApiGatewayV2ControllerRole \
+  --assume-role-policy-document file://trust-policy.json
+
+aws iam put-role-policy \
+  --role-name ACKApiGatewayV2ControllerRole \
+  --policy-name VPCLinkPolicy \
+  --policy-document file://vpc-link-policy.json
+
+``` 
+
+#### Associate the Role with a Namespace
+```bash
+eksctl create addon \
+  --cluster $CLUSTER_NAME \
+  --name eks-pod-identity-agent
+
+
+eksctl create pod-identity-association \
+  --cluster $CLUSTER_NAME \
+  --namespace kube-system \
+  --role-arn $(aws iam get-role --role-name ACKApiGatewayV2ControllerRole --query "Role.Arn" --output text) \
+  --service-account ack-apigatewayv2-controller
+
+```
+
+#### Annotate the Deployment
+```
+kubectl annotate deployment ack-apigatewayv2-controller-apigatewayv2-chart -n kube-system \
+eks.amazonaws.com/pod-identity=$(aws iam get-role --role-name ACKApiGatewayV2ControllerRole --query "Role.Arn" --output text)
+```
+
 #### Create API Gateway resources - handling North/South Traffic
   - Create security group for the VPC link:
 ```bash
@@ -272,7 +303,7 @@ AGW_VPCLINK_SG=$(aws ec2 create-security-group \
 
 ```
 
-#### Create a VPC Link for the internal NLB:
+#### Create a VPC Link for the internal NLB/ALB:
 ```bash
 
 cat <<EOF > vpc-link.yaml
@@ -280,6 +311,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: VPCLink
 metadata:
   name: nlb-internal
+  namespace: go-3tier-app
 spec:
   name: nlb-internal
   securityGroupIDs: 
@@ -297,6 +329,8 @@ EOF
 
 kubectl apply -f vpc-link.yaml
 
+kubectl get vpclinks.apigatewayv2.services.k8s.aws -n go-3tier-app
+
 aws apigatewayv2 get-vpc-links --region $AWS_REGION
 ```
 
@@ -309,26 +343,37 @@ aws apigatewayv2 get-vpc-links --region $AWS_REGION
 ```bash
 # Integration uri should either be for ingress(recommened when using auto mode) or gateway
 
+#### Find the ALB DNS Name from Ingress
+ALB_HOSTNAME=$(kubectl get ingress <ingress-name> -n <namespace> -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+#### Retrieve the ALB ARN Using AWS CLI
+ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" --output text)
+
+
 API_NAME="ack-api"
 INTEGRATION_NAME="private-nlb-integration"
 INTEGRATION_URI="$(aws elbv2 describe-listeners \
-      --load-balancer-arn $(aws elbv2 describe-load-balancers \
-      --region $AWS_REGION \
-      --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway \
-      -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
-      --output text) \
-      --region $AWS_REGION \
-      --query "Listeners[0].ListenerArn" \
-      --output text)"
+  --load-balancer-arn $(aws elbv2 describe-load-balancers \
+  --region $AWS_REGION \
+  --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway \
+  -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
+  --output text) \
+  --region $AWS_REGION \
+  --query "Listeners[0].ListenerArn" \
+  --output text)" || INTEGRATION_URI="$ALB_ARN"
 ROUTE_NAME="ack-route"
 ROUTE_KEY_NAME="ack-route-key"
 STAGE_NAME="\$default"
+
+VPC_LINK_ID=$(kubectl get -n go-3tier-app vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')
+
 
 cat <<EOF > apigwv2-httpapi.yaml
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: API
 metadata:
   name: "${API_NAME}"
+  namespace: go-3tier-app
 spec:
   name: "${API_NAME}"
   protocolType: HTTP
@@ -346,6 +391,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Integration
 metadata:
   name: "${INTEGRATION_NAME}"
+  namespace: go-3tier-app
 spec:
   apiRef:
     from:
@@ -354,7 +400,7 @@ spec:
   integrationURI: "${INTEGRATION_URI}"
   integrationMethod: "ANY"
   connectionType: VPC_LINK
-  connectionID: "$(kubectl get vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')"
+  connectionID: "$(kubectl get -n go-3tier-app vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')"
   payloadFormatVersion: "1.0"
   
 ---
@@ -363,6 +409,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Route
 metadata:
   name: "${API_NAME}"
+  namespace: go-3tier-app
 spec:
   apiRef:
     from:
@@ -374,11 +421,11 @@ spec:
 
 ---
 
-
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Stage
 metadata:
   name: "default"
+  namespace: go-3tier-app
 spec:
   apiRef:
     from:
