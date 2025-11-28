@@ -1,99 +1,267 @@
-## Architecture:
-  - *Create an EKS Cluster using Auto mode or Standard Mode*
-  - Key considerations while using either of the two Modes
-  - *Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
-  Note: these are deployed automatically as system processes when using Auto Mode.*
-  - Implement persistent storage using the CSI drivers (only when auto mode is not been used).
-  - Deploy a sample fullstack app with a Frontend, Backend and Database in a segregatted namespace to test the cluster.
-  - Securely expose microservices running in the cluster to external traffic using HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API, Route or Ingress.
-  - AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs)
-  
-  ![Integration](../images/AWS_EKS.png)
+# A practical guide to integrating Amazon EKS with other AWS services(HTTP API Gateway, NLB, etc) in a production like setting.
 
-#### Prerequisite: Install eksctl, kubectl, aws-cli
+> [!NOTE]
+> This guide assumes you have basic knowledge of Kubernetes, AWS
+
+## Summary:
+
+- _Create an EKS Cluster using Auto mode or Standard Mode_
+- Key considerations while using either of the two Modes
+- \*Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
+  > [!NOTE]
+  > These addons are deployed automatically as system processes when using Auto Mode.
+- Deploy a sample fullstack app with a UI, Worker and Database in a segregated namespace to test the cluster.
+- Securely expose microservices running in the cluster to external traffic using AWS HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API, Route(or Ingress.)
+- Implement end-to-end encryption (Application layer (Layer 7) and IP layer (Layer 3 ) encryption).
+- AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs), that's if you want to aviod context switching to other IAC tools like OpenTofu/Terraform
+
+![Integration](../images/AWS_EKS.png)
+
+#### Prerequisite: Install [eksctl, kubectl](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html), [aws-cli](https://docs.aws.amazon.com/eks/latest/userguide/install-awscli.html) in your dev environment.
+
+## Create a Kubernetes Cluster using EKS Auto or Standard Mode.
 
 #### Create Kubernetes Cluster with EKSCTL - Standard Mode
-  - Addons: CoreDNS, EBS CSI Driver and eks-pod-identity-agent
 
-```bash 
-export CLUSTER_NAME=basic-cluster
-export AWS_REGION=us-east-1
-```
+- You get to manage and customize the data plane
+- Decisions on compute, stoarge, networking etc are soley your responsibility.
+- It gives you room for more flexibility, which also increase the time you need to put in to manage and upgrade your infrastructure
+
+- Addons: CoreDNS, EBS CSI Driver and eks-pod-identity-agent
 
 ```bash
-eksctl create cluster -f cluster.yml
+# Set essential environmental variables
+export CLUSTER_NAME=basic-cluster
+export CLUSTER_NAME_AUTOMODE=auto-mode-cluster
+export AWS_REGION=us-east-1
+export KUBERNETES_VERSION="1.33"
+export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+
 ```
+
+#### [EKSCTL Cluster Config File Schema](https://schema.eksctl.io/)
+
+```bash
+#Standard Mode
+eksctl create cluster -f - <<EOF
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME} #Cluster name
+  region: ${AWS_REGION}
+  version: "${KUBERNETES_VERSION}" #Kubernetes version
+
+autoModeConfig:
+  # defaults to false; Auto Mode will be enabled by default in an upcoming release of eksctl
+  enabled: false
+
+iam:
+  withOIDC: false
+addonsConfig:
+  disableDefaultAddons: true # If true, disables the default EKS addons.
+  #autoApplyPodIdentityAssociations: true # Automatically applies pod identity associations for addons.
+
+# EKS Pod Identity agent addon, CoreDNS, EBS CSI Driver
+addons:
+  - name: eks-pod-identity-agent # Installs the EKS Pod Identity agent addon.
+    version: latest
+  - name: coredns # Installs the CoreDNS addon for DNS-based service discovery.
+    version: latest
+  - name: aws-ebs-csi-driver # Installs the AWS EBS CSI Driver addon for dynamic EBS volume provisioning.
+    version: latest
+    # resolveConflicts: overwrite
+    # wellKnownPolicies:
+    #   ebsCSIController: true # If true, attaches the required IAM policies for the EBS CSI controller.
+EOF
+```
+
 ## OR
 
-#### Create Kubernetes Cluster with EKSCTL in Auto Mode
-  - When you create a cluster using Auto-Mode you don't need enable pod-identity as it's done automatically.
-  - Other Addons (CoreDNS, VPC-CNI, Kube Proxy etc.) are also added automatically as systemd processess.
-  - This service will set you back an additional 12% on top of the standard on-demand EC2 instance pricing for the data plane. That means an additional 12% cost for every instance running in EKS Auto Mode. AWS Auto Mode prices are not affected by instance discounts from Spot, RI, Savings plans ect. You pay for the management of the compute resources provisioned, in addition to your regular EC2 costs. 
+#### [Create EKS Cluster with EKSCTL in Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/automode.html)
+
+- This delegates the management of both the control plane and data plane to AWS. Your nodes are scaled automatically as workload demand increases and decreases, and you get automatic upgrades of the cluster.
+- The EKS Pod Identity Agent is pre-installed automatically on Auto Mode clusters, but you still need to configure pod identity associations for your workloads.
+- Core addons (CoreDNS, VPC-CNI, and EBS CSI Driver) run as systemd processes on worker nodes rather than as Kubernetes pods. Kube-proxy is also managed automatically by Auto Mode.
+- This service costs an additional 12% on top of the standard EC2 instance pricing for the data plane (as of 2025). AWS Auto Mode charges are independent of EC2 instance discounts from Spot, Reserved Instances, or Savings Plans - you still benefit from those discounts on the EC2 costs, but the 12% management fee is calculated separately on the base EC2 price.
+
 ```bash
-eksctl create cluster -f auto-mode-cluster.yml
+#EKS Auto Mode
+eksctl create cluster -f - <<EOF
+# ClusterConfig that creates a cluster with Auto Mode enabled.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME_AUTOMODE}
+  region: ${AWS_REGION}
+
+autoModeConfig:
+  # defaults to false
+  enabled: true
+  # optional, defaults to [general-purpose, system].
+  # To disable creation of nodePools, set it to the empty array ([]).
+  nodePools: [general-purpose, system]
+  # optional, eksctl creates a new role if this is not supplied
+  # and nodePools are present.
+#  nodeRoleARN: ""
+addonsConfig:
+  autoApplyPodIdentityAssociations: true
+
+iam:
+  podIdentityAssociations:
+    - namespace: kube-system
+      serviceAccountName: ack-apigatewayv2-controller
+      permissionPolicy:
+      Version: "2012-10-17"
+      Statement:
+       - Effect: Allow
+        Action:
+        - "apigateway:*"
+        Resource: 'arn:aws:apigateway:*::/*'
+      - Effect: Allow
+        Action:
+        - "iam:CreateServiceLinkedRole"
+        Resource: "*"
+      - Effect: Allow
+        Action:
+        - "ec2:*"
+        Resource: "*"
+EOF
 ```
 
-#### Create pod identity association for Cilium operator service account, giving it the required permissions, aws-load-balancer-controller and ack-apigatewayv2-controller (Not required when Auto mode is enabled).
+#### Create pod identity association to grant the various AWS Controllers and service accounts permissions in AWS; Cilium operator service account, aws-load-balancer-controller, EBS CSI controller and ack-apigatewayv2-controller.
+
 [Amazon EKS Pod Identity](https://aws.amazon.com/blogs/containers/amazon-eks-pod-identity-a-new-way-for-applications-on-eks-to-obtain-iam-credentials/)
 
 ```bash
-eksctl create podidentityassociation -f pod-identity.yml
+eksctl create podidentityassociation -f - <<EOF
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME} #Cluster name
+  region: ${AWS_REGION}
+  version: "${KUBERNETES_VERSION}"
+
+# Creating Pod Identity Associations to grant permissions to AWS Load Balancer controller & API Gateway controller.
+iam:
+  # roleARN is not given, eksctl will first create an IAM role with automatically generated roleName,
+  # using the permissionPolicy inline document
+  podIdentityAssociations:
+  # EBS CSI Driver - ADD THIS ONE
+  - namespace: kube-system
+    serviceAccountName: ebs-csi-controller-sa
+    createServiceAccount: true
+    roleName: eks-ebs-csi-driver-role
+    permissionPolicyARNs:
+      - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+  - namespace: kube-system
+    serviceAccountName: cilium-operator
+    createServiceAccount: false  # Automatically create the service account if not existing
+    roleName: eks-cilium-controller-role
+    permissionPolicy:
+      Version: "2012-10-17"
+      Statement:
+      - Effect: Allow
+        Action:
+        - "ec2:CreateNetworkInterface"
+        - "ec2:AttachNetworkInterface"
+        - "ec2:DeleteNetworkInterface"
+        - "ec2:DetachNetworkInterface"
+        - "ec2:DescribeNetworkInterfaces"
+        - "ec2:ModifyNetworkInterfaceAttribute"
+        - "ec2:AssignPrivateIpAddresses"
+        - "ec2:UnassignPrivateIpAddresses"
+        - "ec2:DescribeInstanceTypes" # Required for ENI mode
+        - "ec2:DescribeInstances"
+        - "ec2:DescribeSubnets"
+        - "ec2:DescribeVpcs"
+        - "ec2:CreateTags"
+        - "ec2:DescribeSecurityGroups"
+        - "ec2:DescribeRouteTables"
+        - "ec2:DescribeAvailabilityZones"
+        Resource: '*'
+
+  - namespace: kube-system
+    serviceAccountName: aws-load-balancer-controller
+    createServiceAccount: true
+    roleName: EKS-LoadBalancer-Controller-Role
+    wellKnownPolicies:
+      awsLoadBalancerController: true
+    # permissionPolicy:
+    #   Version: "2012-10-17"
+    #   Statement:
+    #   - Effect: Allow
+    #     Action:
+    #     - "ec2:*"
+    #     Resource: '*'
+    #   - Effect: Allow
+    #     Action:
+    #     - "elasticloadbalancing:*"
+    #     Resource: '*'
+
+  - namespace: kube-system
+    serviceAccountName: ack-apigatewayv2-controller
+    createServiceAccount: true
+    roleName: EKS-API-Gateway-Controller-Role
+    permissionPolicy:
+      Version: "2012-10-17"
+      Statement:
+      - Effect: Allow
+        Action:
+        - "apigateway:*"
+        Resource: 'arn:aws:apigateway:*::/*'
+      - Effect: Allow
+        Action:
+        - "iam:CreateServiceLinkedRole"
+        Resource: "*"
+
+  - namespace: kube-system
+    serviceAccountName: ack-ec2-controller
+    createServiceAccount: false
+    roleName: EKS-EC2-Controller-Role
+    permissionPolicy:
+      Version: "2012-10-17"
+      Statement:
+      - Effect: Allow
+        Action:
+        - "ec2:*"
+        Resource: '*'
+      - Effect: Allow
+        Action:
+        - "iam:CreateServiceLinkedRole"
+        Resource: "*"
+
+EOF
 ```
 
-#### Deploy Managed NodeGroups.
-#### Create NodeGroup
-  - AMI is BottleRocket
-  - Taint the Nodes (application pods are not scheduled/executed until Cilium is deployed)
-```bash
-eksctl create nodegroup -f nodegroup.yml
-```
+## Install Cilium CNI on the cluster using helm and replace Kube-proxy, enable Gateway API, enable WireGuard for Pod to Pod communication encryption. (Not required while using Auto Mode)
 
-#### Create NodePool and NodeClass using Karpenter
-
-#### Deploy the AWS Load Balancer Controller (Not required while using Auto Mode)
-[Install ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
-
-```bash
-## Get EKS cluster VPC ID
-export AGW_VPC_ID=$(aws eks describe-cluster \
---name $CLUSTER_NAME \
---region $AWS_REGION  \
---query "cluster.resourcesVpcConfig.vpcId" \
---output text)
-
-helm repo add eks https://aws.github.io/eks-charts && helm repo update eks
-
-helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
--n kube-system \
---set clusterName=$CLUSTER_NAME \
---set serviceAccount.create=false \
---set serviceAccount.name=aws-load-balancer-controller \
---set region=$AWS_REGION \
---set vpcId=$AGW_VPC_ID
-
-kubectl get deployment -n kube-system aws-load-balancer-controller
-```
-
-#### Install Cilium CNI on the cluster using helm and replace Kube-proxy. (Not required while using Auto Mode)
 [Helm install Cilium docs](https://docs.cilium.io/en/stable/installation/k8s-install-helm/)
 
 #### You can install Cilium in either ENI mode or Overlay mode on an EKS cluster.
- - In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI, so the aws-node DaemonSet has to be patched to prevent conflict behavior.
-    - set your API_SERVER_IP and API_SERVER_PORT by using `kubectl cluster-info`
+
+- In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI, so the aws-node DaemonSet has to be patched to prevent conflict behavior.
+  - set your API_SERVER_IP and API_SERVER_PORT by using `kubectl cluster-info`
 
 #### Before we install Cilium with Gateway API, we need to make sure we install the Gateway API CRDs
+
 [Install standard channels crds](https://gateway-api.sigs.k8s.io/guides/?h=crds#getting-started-with-gateway-api)
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
+# Install Cilium Gateway API CRDs
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
 
 
+
+# Install Cilium using Helm
 helm repo add cilium https://helm.cilium.io/ && helm repo update cilium
 
 API_SERVER_IP=$(aws eks describe-cluster --name $CLUSTER_NAME --query "cluster.endpoint" --output text | sed 's|https://||')
 API_SERVER_PORT=443
 
-helm install cilium cilium/cilium --version 1.16.4 \
+helm install cilium cilium/cilium --version 1.18.4 \
   --namespace kube-system \
   --set eni.enabled=true \
   --set ipam.mode=eni \
@@ -108,59 +276,374 @@ helm install cilium cilium/cilium --version 1.16.4 \
   --set k8sServiceHost=${API_SERVER_IP} \
   --set k8sServicePort=${API_SERVER_PORT} \
   --set cluster.name=${CLUSTER_NAME} \
-  --set gatewayAPI.enabled=true 
-
-
-kubectl get gatewayclasses.gateway.networking.k8s.io cilium
+  --set encryption.enabled=true \
+  --set encryption.type=wireguard \
+  --set gatewayAPI.enabled=true\
+  --set operator.replicas=1
 
 ```
 
-#### Create a namespace to isolate the application
- - For a namespace that implements Pod Security Standards checkout:
- - [Kubernetes Security Section](./security/README.md)
+## Deploy Managed NodeGroups where your workloads can run.
+
+- AMI is BottleRocket
+- Taint the Nodes (application pods are not scheduled/executed until Cilium is deployed)
 
 ```bash
-kubectl apply -f namespaces/go-3tier-app.yml
+eksctl create nodegroup -f - <<EOF
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME} #Cluster name
+  region: ${AWS_REGION}
+  version: "${KUBERNETES_VERSION}"  #Kubernetes version
+
+managedNodeGroups:
+  - name: managed-ng-1
+    minSize: 1
+    maxSize: 2
+    desiredCapacity: 1
+    amiFamily: "Bottlerocket"
+    instanceType: m5.large
+    volumeSize: 20
+    labels: {role: worker}
+    tags:
+      costid: iac
+      createdby: eksctl
+      nodegroup-role: worker
+    taints:   # application pods are not scheduled/executed until Cilium is deployed.
+    - key: "node.cilium.io/agent-not-ready"
+      value: "true"
+      effect: "NoExecute"
+    # iam:
+    #   withAddonPolicies:
+    #     # ebs: true
+    #     externalDNS: true
+    #     certManager: true
+    #     imageBuilder: true
+    #     awsLoadBalancerController: true
+EOF
 ```
 
-#### Deploy EBS CSI Driver (Not rquired while using EKS Auto Mode).
- - This is already added as an addon during cluster creation.
+#### Create a namespace to isolate the application and it's dependencies
 
- ```bash
- # Get default storage class
- kubectl get storageclass
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: go-3tier-app
+spec: {}
+status: {}
+EOF
+```
 
-# Create a Storage Class
+## Depoly relevant Controllers in the EKS Cluster and Grant them the required Permissions to AWS resources.
+
+_What are AWS Controllers for Kubernetes (ACK)?_
+
+ACK enables you to manage AWS service dependencies (like S3, RDS, Lambda) directly from Kubernetes using the Kubernetes resource model and control loop. Instead of provisioning AWS resources separately through the console, CLI, or IaC tools, you can define them as Kubernetes custom resources.
+
+**How ACK Works**
+
+ACK leverages the standard Kubernetes control loop:
+
+1. **Observe** - Kubernetes reads your resource configuration
+2. **Diff** - Compares desired state with actual state
+3. **Act** - Reconciles any differences
+
+While this control loop traditionally manages in-cluster resources (Deployments, Pods, Services), Kubernetes' modular architecture allows ACK to extend this pattern to manage AWS resources outside the cluster.
+
+**Architecture & Workflow**
+
+- ACK releases a separate controller for each AWS service (S3, Lambda, RDS, etc.) - there's no single unified release
+- Ops teams deploy controllers for services developers need
+- Controllers authenticate with AWS using Pod Identity (or IRSA)
+- Developers define custom resources and apply them with `kubectl apply`
+- RBAC controls which developers can create specific AWS resources
+
+**Why Use ACK?**
+
+ACK provides a unified workflow for managing both application resources (running in Kubernetes) and infrastructure dependencies (AWS services). Instead of context-switching between Kubernetes manifests and separate IaC tools like Terraform or CloudFormation, developers use a single Kubernetes-native approach for their entire stack. This reduces operational complexity and cognitive overhead, especially for teams already familiar with Kubernetes.
+
+_What's EKS Pod Identity?_
+
+EKS Pod Identity enables you to securely connect workloads running in an EKS cluster to AWS services like S3 by linking IAM roles to pods. While similar to IRSA (IAM Roles for Service Accounts), Pod Identity streamlines the operational overhead and is backwards compatible with IRSA.
+
+Key improvements over IRSA:
+
+- No need to create an OIDC provider for each cluster - roles can be reused across multiple clusters without updating trust policies.
+- Simplified trust policies using the `pods.eks.amazonaws.com` service principal instead of cluster-specific OIDC endpoints.
+- Built-in attribute-based access control (ABAC) through automatic session tags (cluster name, namespace, service account) that enable fine-grained permissions with a single IAM policy.
+
+# List of Controllers to be installed
+
+- API Gateway
+- EC2
+- ALB
+
+## Chicken-and-Egg Problem:
+
+To create VPC endpoints using CRDs, you need to install EC2 Controller and for the controller to communicate with the AWS API and it can't communicate with the AWS API without the VPC endpoints (ec2,sts), so we first manually create the VPC endpoint using the CLI.
+EBS CSI controller also needs to communicate to the AWS EC2 API
+
+You need:
+
+VPC Endpoint → to fix networking
+ACK EC2 Controller → to create VPC Endpoint
+But ACK controller needs networking to work!
+
+✅ Solution: Create VPC Endpoint Manually First
+Use the AWS CLI to create the VPC endpoint, then ACK can manage other resources:
+
+```bash
+# Get VPC ID
+VPC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} \
+  --query 'cluster.resourcesVpcConfig.vpcId' --output text)
+
+echo "VPC_ID: ${VPC_ID}"
+
+
+# Unique Private Subnets in each AZ
+SUBNET_JSON=$(aws eks describe-cluster \
+  --name ${CLUSTER_NAME} \
+  --region ${AWS_REGION} \
+  --query 'cluster.resourcesVpcConfig.vpcId' \
+  --output text | \
+  xargs -I {} aws ec2 describe-subnets \
+    --filters "Name=vpc-id,Values={}" \
+              "Name=map-public-ip-on-launch,Values=false" \
+    --query 'Subnets[*].{SubnetId:SubnetId,AZ:AvailabilityZone}' \
+    --output json | \
+  jq '[group_by(.AZ) | .[] | .[0].SubnetId]')
+
+echo "Private subnets (one per AZ): ${SUBNET_JSON}"
+
+
+# Get cluster security group
+CLUSTER_SG=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} \
+  --query 'cluster.resourcesVpcConfig.clusterSecurityGroupId' --output text)
+
+echo "CLUSTER_SG: ${CLUSTER_SG}"
+
+# Create VPC endpoint with just the first 2 subnets
+aws ec2 create-vpc-endpoint \
+  --vpc-id ${VPC_ID} \
+  --service-name com.amazonaws.${AWS_REGION}.ec2 \
+  --vpc-endpoint-type Interface \
+  --subnet-ids $(echo ${SUBNET_JSON} | jq -r '.[]' | xargs) \
+  --security-group-ids ${CLUSTER_SG} \
+  --private-dns-enabled \
+  --tag-specifications "ResourceType=vpc-endpoint,Tags=[{Key=Name,Value=eks-ec2-api-endpoint},{Key=ManagedBy,Value=AWS-CLI},{Key=Purpose,Value=EBS-CSI-Driver}]"
+
+
+aws ec2 describe-vpc-endpoints \
+  --filters "Name=vpc-id,Values=${VPC_ID}" \
+  --query 'VpcEndpoints[].[ServiceName,State,VpcEndpointId]' \
+  --output table
+```
+
+## The container keeps crashing before you can exec into it. And you only have the EC2 VPC endpoint. The ACK controller likely needs the STS endpoint for AWS credential refresh.
+
+## Let's create the STS VPC endpoint:
+
+```bash
+
+aws ec2 create-vpc-endpoint \
+  --vpc-id ${VPC_ID} \
+  --service-name com.amazonaws.${AWS_REGION}.sts \
+  --vpc-endpoint-type Interface \
+  --subnet-ids $(echo ${SUBNET_JSON} | jq -r '.[]' | xargs) \
+  --security-group-ids ${CLUSTER_SG} \
+  --private-dns-enabled \
+  --tag-specifications "ResourceType=vpc-endpoint,Tags=[{Key=Name,Value=eks-sts-endpoint},{Key=Purpose,Value=Pod-Identity}]"
+
+# Wait for it to become available
+aws ec2 describe-vpc-endpoints \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=service-name,Values=com.amazonaws.us-east-1.sts" \
+  --query 'VpcEndpoints[].[VpcEndpointId,State]' \
+  --output table
+```
+
+## Install EC2 Controller
+
+# https://aws-controllers-k8s.github.io/community/docs/tutorials/ec2-example/
+
+```bash
+export EC2_SERVICE=ec2
+export RELEASE_VERSION=$(curl -sL https://api.github.com/repos/aws-controllers-k8s/${EC2_SERVICE}-controller/releases/latest | jq -r '.tag_name | ltrimstr("v")')
+export ACK_SYSTEM_NAMESPACE=kube-system
+
+aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
+
+helm install  -n $ACK_SYSTEM_NAMESPACE --create-namespace ack-$EC2_SERVICE-controller \
+--set serviceAccount.create=true --set serviceAccount.name=ack-$EC2_SERVICE-controller \
+  oci://public.ecr.aws/aws-controllers-k8s/$EC2_SERVICE-chart --version=$RELEASE_VERSION --set=aws.region=$AWS_REGION
+
+#Check the CRDs have been installed using:
+kubectl get crds
+```
+
+## **_Creare Security group for endpoints_**
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: SecurityGroup
+metadata:
+  name: endpoints-sg
+  namespace: go-3tier-app
+spec:
+  description: "Endpoints security group"
+  name: SG_ENDPOINTS
+  vpcID: ${VPC_ID}
+  ingressRules:
+    - ipProtocol: tcp
+      fromPort: 443
+      toPort: 443
+      userIDGroupPairs:
+      - groupID: ${CLUSTER_SG}  # Reference the node group SGs
+        description: "Allow HTTPS inbound"
+  egressRules:
+    - ipProtocol: tcp
+      fromPort: 443
+      toPort: 443
+      ipRanges:
+        - cidrIP: 0.0.0.0/0
+          description: "Allow HTTPS outbound"
+EOF
+
+```
+
+## Create VPC endpoints so the controller (e.g CSI-EBS controller) can reach AWS APIs:
+
+```bash
+
+kubectl apply -f - <<EOF
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: VPCEndpoint
+metadata:
+  name: ec2-api-endpoint
+  namespace: kube-system
+spec:
+  vpcID: ${VPC_ID}
+  serviceName: com.amazonaws.${AWS_REGION}.ec2
+  vpcEndpointType: Interface
+  subnetIDs: ${SUBNET_JSON}
+  securityGroupIDs:
+    - ${CLUSTER_SG}  # cluster security group ID
+  privateDNSEnabled: true
+  tags:
+    - key: Name
+      value: eks-ec2-api-endpoint
+    - key: ManagedBy
+      value: ACK
+    - key: Purpose
+      value: EBS-CSI-Driver
+EOF
+
+# Check the resource status
+kubectl describe vpcendpoint ec2-api-endpoint -n kube-system
+
+# Verify in AWS
+aws ec2 describe-vpc-endpoints \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=service-name,Values=com.amazonaws.us-east-1.ec2" \
+  --query 'VpcEndpoints[].[VpcEndpointId,State,ServiceName]' \
+  --output table
+```
+
+#### Deploy the AWS Load Balancer Controller using Helm (Not required while using Auto Mode)
+
+Cilium Gateway API will need it to create NLB/ALBs
+
+[Install ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
+
+```bash
+
+helm repo add eks https://aws.github.io/eks-charts && helm repo update eks
+
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+-n kube-system \
+--set clusterName=$CLUSTER_NAME \
+--set serviceAccount.create=false \
+--set serviceAccount.name=aws-load-balancer-controller \
+--set region=$AWS_REGION \
+--set vpcId=$VPC_ID
+
+kubectl get deployment -n kube-system aws-load-balancer-controller
+```
+
+## The AWS Load Balancer Controller needs to reach the AWS ELB API endpoint. You need a VPC endpoint for Elastic Load Balancing.
+
+```bash
+
+kubectl apply -f - <<EOF
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: VPCEndpoint
+metadata:
+  name: elasticloadbalancing-endpoint
+  namespace: go-3tier-app
+spec:
+  vpcID: ${VPC_ID}
+  serviceName: com.amazonaws.${AWS_REGION}.elasticloadbalancing
+  vpcEndpointType: Interface
+  subnetIDs: ${SUBNET_JSON}
+  securityGroupIDs:
+    - ${CLUSTER_SG}
+  privateDNSEnabled: true
+  tags:
+    - key: Name
+      value: elasticloadbalancing-vpc-endpoint
+EOF
+
+# Verify from the EKS Cluster
+
+# Verify on AWS
+aws ec2 describe-vpc-endpoints \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=service-name,Values=com.amazonaws.${AWS_REGION}.elasticloadbalancing" \
+  --query 'VpcEndpoints[*].[VpcEndpointId,State]' \
+  --output table
+```
+
+## Run workloads on the cluster you created.
+
+# Create a Storage Class to persist data on Mongo Database
+
+```bash
+# Check for the default storage class
+kubectl get storageclass
+
 
 # StorageClass when using Auto Mode
-cat <<EOF > storage-class-auto.yaml
+kubectl apply -f - <<EOF
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
 metadata:
-  name: auto-ebs-sc
-  annotations:
-    storageclass.kubernetes.io/is-default-class: "true"
+ name: auto-ebs-sc
+ annotations:
+   storageclass.kubernetes.io/is-default-class: "true"
 provisioner: ebs.csi.eks.amazonaws.com
 parameters:
-  type: gp3                 # Specifies the volume type (gp3)
-  fsType: ext4              # Filesystem type  
-  iops: "3000"              # Configurable IOPS (min: 3000, max: 16000)
-  throughput: "125"         # Throughput in MiB/s (max: 1000 for gp3)   
+ type: gp3                 # Specifies the volume type (gp3)
+ fsType: ext4              # Filesystem type
+ iops: "3000"              # Configurable IOPS (min: 3000, max: 16000)
+ throughput: "125"         # Throughput in MiB/s (max: 1000 for gp3)
 volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
 EOF
 
-kubectl apply -f storage-class-auto.yaml
-
+# Check for the new storage class
 kubectl get storageclass
 
 # StorageClass when using Standard Mode
 
- ```
+```
 
- # Create a PersistentVolumeClaim 
+#### Create a PersistentVolumeClaim
 
- ```bash
-cat <<EOF > mongo-pvc.yaml
+```bash
+kubectl apply -f - <<EOF
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
@@ -169,94 +652,302 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: auto-ebs-sc
+  storageClassName: gp2
   resources:
     requests:
       storage: 1Gi
 EOF
 
-kubectl apply -f mongo-pvc.yaml
+kubectl get pvc -n go-3tier-app
+```
 
-kubectl get pvc
- ```
+#### Deploy app using Deployment, Service, PVC, ConfigMap
 
-
-
-#### Deploy app using Deployment, Service, PVC
-  - Use ConfigMaps to pass configuration data to the deployments.
+- Use ConfigMaps to pass configuration data to the deployments.
 
 ```bash
 kubectl apply -f app/.
 
-kubectl get svc frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+kubectl get svc  -n go-3tier-app frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 ```
-#### Or deploy app using helm
+
+## Directing external user traffic to the application running in the cluster.
+
+## Service Networking
+
+#### Gateway API (Cilium implementation) (North/South Traffic) - accepting traffic into the cluster. This creates an internal NLB (Network Load Balancer) that accepts external traffic from AWS API Gateway
+
+- GatewayClass, deployed when cilium is been installed (gatewayAPI.enabled=true)
+- Gateway
+- HTTPRoute --> Service
 
 ```bash
-helm install fullstack-app app-chart
+
+# Gateway Config
+kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway
+  namespace: go-3tier-app
+spec:
+  gatewayClassName: cilium
+  listeners:
+  - protocol: HTTP
+    port: 80
+    name: web-gw
+    allowedRoutes:
+      namespaces:
+        from: All
+EOF
+
+---
+
+# HTTProute config
+kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: HTTPRoute
+metadata:
+  name: combined-route
+  namespace: go-3tier-app
+spec:
+  parentRefs:
+    - name: my-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/api/"
+      backendRefs:
+        - name: backend-service
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/"
+      backendRefs:
+        - name: frontend-service
+          port: 8080
+EOF
+
+kubectl get httproute -n go-3tier-app
+kubectl get gateway -n go-3tier-app
 ```
 
-#### Test Backend Connectivity internally
-```bash
-
-kubectl exec -it <frontend-pod-name> -- curl -X POST http://backend-service/api/record \
--H "Content-Type: application/json" \
--d '{
-    "name": "John Doe",
-    "age": 30,
-    "mobile_number": "1234567890",
-    "email": "johndoe@example.com"
-}'
-
-kubectl exec -it <frontend-pod-name> -- curl http://backend-service/api/record
-```
-
-#### Service Networking
-#### Gateway API (Cilium implementation) (North/South Traffic) - accepting traffic into the cluster, create using Helm. This creates an NLB (Network Load Balancer) that accepts external traffic 
-  - GatewayClass, deployed when cilium is been installed (gatewayAPI.enabled=true)
-  - Gateway
-  - HTTPRoute --> Service
-
-```bash
-kubectl apply -f gateway.yml
-
-kubectl apply -f httproute.yml
-```
 ## OR
 
-#### [Create an IngressClass to configure an Application Load Balancer](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html)
-#### Recommended when using auto mode, because the aws vpc cni is backed in as a systemd process and can't be changed to Cilium CNI.
+#### [Create an AWS IngressClass to configure an Application Load Balancer](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html)
+
+#### Recommended when using auto mode, because the aws vpc cni is baked in as a systemd process and can't be changed to Cilium CNI as off writing this guide in 2025.
 
 ```bash
+
 kubectl apply -f ingress/.
+
 
 ## Check Status
 kubectl get ingress -n go-3tier-app
 ```
 
+## Create API Gateway resources - handling East/West Traffic
 
 #### Deploy ACK Controller for API Gateway
-[Installing AWS Service Controllers](https://aws-controllers-k8s.github.io/community/docs/user-docs/install/)
-***Helm charts for ACK service controllers can be found in the*** [ACK registry within the Amazon ECR Public Gallery](https://gallery.ecr.aws/aws-controllers-k8s) To find a Helm chart for a specific service, you can go to gallery.ecr.aws/aws-controllers-k8s/$SERVICENAME-chart. For example, the link to the ACK service controller Helm chart for Amazon Simple Storage Service (Amazon S3) is gallery.ecr.aws/aws-controllers-k8s/s3-chart.
 
-*You can use the Helm CLI to log into the ECR public Helm registry and install the chart.*
+[Installing AWS Service Controllers](https://aws-controllers-k8s.github.io/community/docs/user-docs/install/)
+**_Helm charts for ACK service controllers can be found in the_** [ACK registry within the Amazon ECR Public Gallery](https://gallery.ecr.aws/aws-controllers-k8s) To find a Helm chart for a specific service, you can go to gallery.ecr.aws/aws-controllers-k8s/$SERVICENAME-chart. For example, the link to the ACK service controller Helm chart for Amazon Simple Storage Service (Amazon S3) is gallery.ecr.aws/aws-controllers-k8s/s3-chart.
+
+_You can use the Helm CLI to log into the ECR public Helm registry and install the chart._
 
 ```bash
 export ACK_SYSTEM_NAMESPACE=kube-system
-export SERVICE=apigatewayv2
-export RELEASE_VERSION=$(curl -sL https://api.github.com/repos/aws-controllers-k8s/${SERVICE}-controller/releases/latest | jq -r '.tag_name | ltrimstr("v")')
-export AWS_REGION=us-east-1
+export API_GATEWAY_SERVICE=apigatewayv2
+export RELEASE_VERSION=$(curl -sL https://api.github.com/repos/aws-controllers-k8s/${API_GATEWAY_SERVICE}-controller/releases/latest | jq -r '.tag_name | ltrimstr("v")')
 export CHART_REPO=oci://public.ecr.aws/aws-controllers-k8s
 
 aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
 
 
-helm install --create-namespace -n $ACK_SYSTEM_NAMESPACE ack-$SERVICE-controller \
-$CHART_REPO/$SERVICE-chart --version $RELEASE_VERSION --set=aws.region=$AWS_REGION
+helm install --create-namespace -n $ACK_SYSTEM_NAMESPACE ack-$API_GATEWAY_SERVICE-controller \
+$CHART_REPO/$API_GATEWAY_SERVICE-chart --version $RELEASE_VERSION --set=aws.region=$AWS_REGION \
+--set serviceAccount.name=ack-apigatewayv2-controller --set=serviceAccount.create=false
 
 ```
 
-#### Create IAM Role for ACKApiGatewayV2ControllerRole
+## VPC Endpoint for API Gateway Execute API
+
+````bash
+
+#Create Security group for API Gateway endpoint
+
+kubectl apply -f - <<EOF
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: SecurityGroup
+metadata:
+  name: sg-apigateway-endpoint
+  namespace: go-3tier-app
+spec:
+  description: "API security group"
+  name: SG_API_GATEWAY
+  vpcID: ${VPC_ID}
+  ingressRules:
+    - ipProtocol: tcp
+      fromPort: 443
+      toPort: 443
+      userIDGroupPairs:
+      - groupID: ${CLUSTER_SG}  # Reference the node group SGs
+        description: "Allow HTTPS inbound"
+  egressRules:
+    - ipProtocol: tcp
+      fromPort: 443
+      toPort: 443
+      ipRanges:
+        - cidrIP: 0.0.0.0/0
+          description: "Allow HTTPS outbound"
+EOF
+
+---
+
+kubectl apply -f - <<EOF
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: VPCEndpoint
+metadata:
+  name: apigateway-endpoint
+  namespace: go-3tier-app
+spec:
+  vpcID: ${VPC_ID}
+  serviceName: com.amazonaws.us-east-1.execute-api
+  vpcEndpointType: Interface
+  subnetIDs: ${SUBNET_JSON}
+  # securityGroupIDs:
+  # - string
+  securityGroupRefs:
+    - from:
+        name: sg-apigateway-endpoint  # Reference the API Gateway Endpoint SG
+        namespace: go-3tier-app
+  privateDNSEnabled: true
+  tags:
+    - key: Name
+      value: apigateway-vpc-endpoint
+    - key: ManagedBy
+      value: ACK
+EOF
+```
+## Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway)
+
+# Note: API Gateway service is only available in specific AZs (us-east-1b, us-east-1c, us-east-1d) in US-EAST-1 Region
+# We need to find a compatible subnet in one of these zones
+
+```bash
+COMPATIBLE_SUBNET=$(aws ec2 describe-subnets \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=map-public-ip-on-launch,Values=false" "Name=availability-zone,Values=us-east-1b" \
+  --query 'Subnets[0].SubnetId' --output text) && echo "Compatible subnet: ${COMPATIBLE_SUBNET}"
+
+kubectl apply -f - <<EOF
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: VPCEndpoint
+metadata:
+  name: apigateway-management-endpoint
+  namespace: go-3tier-app
+spec:
+  vpcID: ${VPC_ID}
+  serviceName: com.amazonaws.${AWS_REGION}.apigateway
+  vpcEndpointType: Interface
+  subnetIDs:
+    - ${COMPATIBLE_SUBNET}
+  securityGroupRefs:
+    - from:
+        name: sg-apigateway-endpoint  # Reference the API Gateway Endpoint SG
+        namespace: go-3tier-app
+  privateDNSEnabled: true
+  tags:
+    - key: Name
+      value: apigateway-management-endpoint
+    - key: ManagedBy
+      value: ACK
+    - key: Purpose
+      value: ACK-APIGateway-Controller
+EOF
+
+
+aws ec2 describe-vpc-endpoints \
+ --filters "Name=vpc-id,Values=${VPC_ID}" \
+ --query 'VpcEndpoints[].[ServiceName,State,VpcEndpointId]' \
+ --output table
+````
+
+#### Create security group for the VPC link:
+
+# https://aws-controllers-k8s.github.io/community/reference/ec2/v1alpha1/securitygroup/
+
+```bash
+
+kubectl apply -f - <<EOF
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: SecurityGroup
+metadata:
+  name: sg-vpc-link
+  namespace: go-3tier-app
+spec:
+  description: "ack security group"
+  name: SG_VPC_LINK
+  vpcID: ${VPC_ID}
+  ingressRules:
+    - ipProtocol: tcp
+      fromPort: 443
+      toPort: 443
+      userIDGroupPairs:
+      - groupID: ${CLUSTER_SG}  # Reference your node group SGs
+        description: "Allow HTTPS inbound"
+  egressRules:
+    - ipProtocol: tcp
+      fromPort: 443
+      toPort: 443
+      ipRanges:
+        - cidrIP: 0.0.0.0/0
+          description: "Allow HTTPS outbound"
+    - ipProtocol: tcp
+      fromPort: 80
+      toPort: 80
+      ipRanges:
+        - cidrIP: 0.0.0.0/0
+          description: "Allow HTTP to NLB"
+EOF
+
+
+export VPCLINK_SG=$(aws ec2 describe-security-groups \
+  --filters "Name=group-name,Values=SG_VPC_LINK" "Name=vpc-id,Values=$VPC_ID" \
+  --region $AWS_REGION \
+  --query "SecurityGroups[0].GroupId" \
+  --output text)
+
+echo $VPCLINK_SG
+```
+
+#### Create a VPC Link for the internal NLB/ALB:
+
+```bash
+
+kubectl apply -f - <<EOF
+apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
+kind: VPCLink
+metadata:
+  name: nlb-internal
+  namespace: go-3tier-app
+spec:
+  name: nlb-internal
+  securityGroupIDs:
+    - $VPCLINK_SG
+  subnetIDs: ${SUBNET_JSON}
+EOF
+
+
+kubectl get vpclinks.apigatewayv2.services.k8s.aws -n go-3tier-app
+
+aws apigatewayv2 get-vpc-links --region $AWS_REGION
+```
+
+#### Create IAM Role for ACKApiGatewayV2ControllerRole (Only when using Auto Mode)
+
 ```bash
 aws iam create-role \
   --role-name ACKApiGatewayV2ControllerRole \
@@ -267,9 +958,10 @@ aws iam put-role-policy \
   --policy-name VPCLinkPolicy \
   --policy-document file://vpc-link-policy.json
 
-``` 
+```
 
-#### Associate the Role with a Namespace
+#### Associate the Role with a Namespace (Only when using Auto Mode)
+
 ```bash
 eksctl create addon \
   --cluster $CLUSTER_NAME \
@@ -284,58 +976,15 @@ eksctl create pod-identity-association \
 
 ```
 
-#### Annotate the Deployment
+#### Annotate the Deployment (Only when using Auto Mode)
+
 ```
 kubectl annotate deployment ack-apigatewayv2-controller-apigatewayv2-chart -n kube-system \
 eks.amazonaws.com/pod-identity=$(aws iam get-role --role-name ACKApiGatewayV2ControllerRole --query "Role.Arn" --output text)
 ```
 
-#### Create API Gateway resources - handling North/South Traffic
-  - Create security group for the VPC link:
-```bash
-AGW_VPCLINK_SG=$(aws ec2 create-security-group \
---description "SG for VPC Link" \
---group-name SG_VPC_LINK \
---vpc-id $AGW_VPC_ID \
---region $AWS_REGION \
---output text \
---query 'GroupId')
+#### Create an AWS HTTP API Gateway Route, VPC Link Integration and Stage: - private integration with AWS VPC **_K8S CRD_**
 
-```
-
-#### Create a VPC Link for the internal NLB/ALB:
-```bash
-
-cat <<EOF > vpc-link.yaml
-apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
-kind: VPCLink
-metadata:
-  name: nlb-internal
-  namespace: go-3tier-app
-spec:
-  name: nlb-internal
-  securityGroupIDs: 
-    - $AGW_VPCLINK_SG
-  subnetIDs: 
-    - $(aws ec2 describe-subnets \
-          --filter Name=tag:kubernetes.io/role/internal-elb,Values=1 \
-          --query 'Subnets[0].SubnetId' \
-          --region $AWS_REGION --output text)
-    - $(aws ec2 describe-subnets \
-          --filter Name=tag:kubernetes.io/role/internal-elb,Values=1 \
-          --query 'Subnets[1].SubnetId' \
-          --region $AWS_REGION --output text)
-EOF
-
-kubectl apply -f vpc-link.yaml
-
-kubectl get vpclinks.apigatewayv2.services.k8s.aws -n go-3tier-app
-
-aws apigatewayv2 get-vpc-links --region $AWS_REGION
-```
-
-
-#### Create an AWS HTTP API Gateway Route, VPC Link Integration and Stage: - private integration with AWS VPC ***K8S CRD***
 [Apigatewayv2-reference-example](https://github.com/aws-controllers-k8s/community/blob/main/docs/content/docs/tutorials/apigatewayv2-reference-example.md)
 
 [Manage HTTP APIs with the ACK APIGatewayv2 Controller](https://aws-controllers-k8s.github.io/community/docs/tutorials/apigatewayv2-reference-example/)
@@ -343,11 +992,11 @@ aws apigatewayv2 get-vpc-links --region $AWS_REGION
 ```bash
 # Integration uri should either be for ingress(recommened when using auto mode) or gateway
 
-#### Find the ALB DNS Name from Ingress
-ALB_HOSTNAME=$(kubectl get ingress <ingress-name> -n <namespace> -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+#### Find the ALB DNS Name from Ingress (Only when using Auto Mode)
+# ALB_HOSTNAME=$(kubectl get ingress <ingress-name> -n <namespace> -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
-#### Retrieve the ALB ARN Using AWS CLI
-ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" --output text)
+#### Retrieve the ALB ARN Using AWS CLI (Only when using Auto Mode)
+# ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" --output text)
 
 
 API_NAME="ack-api"
@@ -355,7 +1004,7 @@ INTEGRATION_NAME="private-nlb-integration"
 INTEGRATION_URI="$(aws elbv2 describe-listeners \
   --load-balancer-arn $(aws elbv2 describe-load-balancers \
   --region $AWS_REGION \
-  --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway \
+  --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway -n go-3tier-app \
   -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
   --output text) \
   --region $AWS_REGION \
@@ -368,7 +1017,13 @@ STAGE_NAME="\$default"
 VPC_LINK_ID=$(kubectl get -n go-3tier-app vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')
 
 
-cat <<EOF > apigwv2-httpapi.yaml
+echo $INTEGRATION_URI
+echo $VPC_LINK_ID
+
+
+
+
+kubectl apply -f - <<EOF
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: API
 metadata:
@@ -384,9 +1039,12 @@ spec:
       - "*"
     allowOrigins:
       - "*"
+EOF
+
 
 ---
 
+kubectl apply -f - <<EOF
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Integration
 metadata:
@@ -400,11 +1058,13 @@ spec:
   integrationURI: "${INTEGRATION_URI}"
   integrationMethod: "ANY"
   connectionType: VPC_LINK
-  connectionID: "$(kubectl get -n go-3tier-app vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')"
+  connectionID: "$VPC_LINK_ID"
   payloadFormatVersion: "1.0"
-  
+EOF
+
 ---
 
+kubectl apply -f - <<EOF
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Route
 metadata:
@@ -418,9 +1078,11 @@ spec:
   targetRef:
     from:
       name: "${INTEGRATION_NAME}"
+EOF
 
 ---
 
+kubectl apply -f - <<EOF
 apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Stage
 metadata:
@@ -435,10 +1097,7 @@ spec:
   description: "auto deployed stage for ${API_NAME}"
 EOF
 
-kubectl apply -f apigwv2-httpapi.yaml
 
 kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}'
 
 ```
-
-
