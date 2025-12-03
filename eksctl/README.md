@@ -32,7 +32,6 @@
 ```bash
 # Set essential environmental variables
 export CLUSTER_NAME=basic-cluster
-export CLUSTER_NAME_AUTOMODE=auto-mode-cluster
 export AWS_REGION=us-east-1
 export KUBERNETES_VERSION="1.33"
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
@@ -94,14 +93,13 @@ EOF
 ```bash
 #EKS Auto Mode
 
-export CLUSTER_NAME_AUTOMODE="basic-auto-cluster"
 eksctl create cluster -f - <<EOF
 # ClusterConfig that creates a cluster with Auto Mode enabled.
 apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
 metadata:
-  name: ${CLUSTER_NAME_AUTOMODE}
+  name: ${CLUSTER_NAME}
   region: ${AWS_REGION}
 
 autoModeConfig:
@@ -116,7 +114,7 @@ autoModeConfig:
 addonsConfig:
   autoApplyPodIdentityAssociations: true
 
-# Define the EKS Capabilities
+# Define the EKS Capabilities, AWS handles controller installation, updates, and scaling for you.
 capabilities:
   - name: ack-capability
     type: ACK
@@ -125,10 +123,6 @@ capabilities:
     tags:
       Environment: dev
       Team: platform
-    ackServiceControllers: # Optional: specify which controllers to enable
-      - ec2
-      - elasticloadbalancing
-      - apigatewayv2
 
 vpc:
   nat:
@@ -151,8 +145,17 @@ iam:
       serviceAccountName: ack-apigatewayv2-controller
       createServiceAccount: true
       roleName: EKS-API-Gateway-Controller-Role
-      permissionPolicyARNs:
-        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayAdministrator
+      permissionPolicy:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Action:
+          - "apigateway:*"
+          Resource: 'arn:aws:apigateway:*::/*'
+        - Effect: Allow
+          Action:
+          - "iam:CreateServiceLinkedRole"
+          Resource: "*"
 
     - namespace: kube-system
       serviceAccountName: aws-load-balancer-controller
@@ -165,9 +168,98 @@ iam:
       serviceAccountName: ack-ec2-controller
       createServiceAccount: false
       roleName: EKS-EC2-Controller-Role
-      permissionPolicyARNs:
-        - arn:aws:iam::aws:policy/service-role/AmazonEC2FullAccess
+      permissionPolicy:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Action:
+          - "ec2:*"
+          Resource: '*'
+        - Effect: Allow
+          Action:
+          - "iam:CreateServiceLinkedRole"
+          Resource: "*"
 EOF
+```
+
+#### EKS Capabilities (Managed)
+
+- ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
+- Examples of using helm as an alternative to install ACK Controllers will be indicated below.
+
+```bash
+# Step 1: Create IAM role for ACK Capability
+aws iam create-role \
+  --role-name ACKCapabilityRole \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "capabilities.eks.amazonaws.com"
+      },
+      "Action": [
+      "sts:AssumeRole",
+      "sts:TagSession"
+      ]
+    }]
+  }'
+
+# Step 2: Attach the AdministratorAccess managed policy to the role:
+
+aws iam attach-role-policy \
+  --role-name ACKCapabilityRole \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+
+# Step 3: Step 3: Create ACK Capability Using eksctl
+eksctl create capability \
+  --cluster ${CLUSTER_NAME} \
+  --region ${AWS_REGION} \
+  --name ack \
+  --type ACK \
+  --role-arn arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/ACKCapabilityRole \
+  --ack-service-controllers ec2, elasticloadbalancing, apigatewayv2
+
+# Step 4: Verify Capability is Active
+eksctl get capability --cluster ${CLUSTER_NAME_AUTOMODE} --region ${AWS_
+REGION} --name ack -o yaml
+
+# Verify CRDs are available
+kubectl api-resources | grep services.k8s.aws
+```
+
+## Get required cluster info
+
+```bash
+# Unique Private Subnets in each AZ
+SUBNET_JSON=$(aws eks describe-cluster \
+  --name ${CLUSTER_NAME} \
+  --region ${AWS_REGION} \
+  --query 'cluster.resourcesVpcConfig.vpcId' \
+  --output text | \
+  xargs -I {} aws ec2 describe-subnets \
+    --filters "Name=vpc-id,Values={}" \
+              "Name=map-public-ip-on-launch,Values=false" \
+    --query 'Subnets[*].{SubnetId:SubnetId,AZ:AvailabilityZone}' \
+    --output json | \
+  jq '[group_by(.AZ) | .[] | .[0].SubnetId]')
+
+echo "Private subnets (one per AZ): ${SUBNET_JSON}"
+
+
+# Get cluster security group
+CLUSTER_SG=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} \
+  --query 'cluster.resourcesVpcConfig.clusterSecurityGroupId' --output text)
+
+echo ${CLUSTER_SG}
+
+# Get VPC ID and VPC CIDR (CRITICAL: Must be done before Cilium install)
+export VPC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} --query "cluster.resourcesVpcConfig.vpcId" --output text)
+export VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids ${VPC_ID} --region ${AWS_REGION} --query 'Vpcs[0].CidrBlock' --output text)
+
+echo "VPC_ID: ${VPC_ID}"
+echo "VPC_CIDR: ${VPC_CIDR}"
+
 ```
 
 #### Create pod identity association to grant the various AWS Controllers and service accounts permissions in AWS; Cilium operator service account, aws-load-balancer-controller, EBS CSI controller and ack-apigatewayv2-controller.
@@ -301,12 +393,7 @@ helm repo add cilium https://helm.cilium.io/ && helm repo update cilium
 API_SERVER_IP=$(aws eks describe-cluster --name $CLUSTER_NAME --query "cluster.endpoint" --output text | sed 's|https://||')
 API_SERVER_PORT=443
 
-# Get VPC ID and VPC CIDR (CRITICAL: Must be done before Cilium install)
-export VPC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} --query "cluster.resourcesVpcConfig.vpcId" --output text)
-export VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids ${VPC_ID} --region ${AWS_REGION} --query 'Vpcs[0].CidrBlock' --output text)
 
-echo "VPC_ID: ${VPC_ID}"
-echo "VPC_CIDR: ${VPC_CIDR}"
 
 helm install cilium cilium/cilium --version 1.18.4 \
   --namespace kube-system \
@@ -473,33 +560,6 @@ helm install  -n $ACK_SYSTEM_NAMESPACE --create-namespace ack-$EC2_SERVICE-contr
 kubectl get crds
 ```
 
-## Get required cluster info
-
-```bash
-# Unique Private Subnets in each AZ
-SUBNET_JSON=$(aws eks describe-cluster \
-  --name ${CLUSTER_NAME} \
-  --region ${AWS_REGION} \
-  --query 'cluster.resourcesVpcConfig.vpcId' \
-  --output text | \
-  xargs -I {} aws ec2 describe-subnets \
-    --filters "Name=vpc-id,Values={}" \
-              "Name=map-public-ip-on-launch,Values=false" \
-    --query 'Subnets[*].{SubnetId:SubnetId,AZ:AvailabilityZone}' \
-    --output json | \
-  jq '[group_by(.AZ) | .[] | .[0].SubnetId]')
-
-echo "Private subnets (one per AZ): ${SUBNET_JSON}"
-
-
-# Get cluster security group
-CLUSTER_SG=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} \
-  --query 'cluster.resourcesVpcConfig.clusterSecurityGroupId' --output text)
-
-echo ${CLUSTER_SG}
-
-```
-
 ## **_Create Security group for endpoints_**
 
 ```bash
@@ -598,6 +658,10 @@ spec:
     - key: Purpose
       value: Pod-Identity
 EOF
+
+kubectl get vpcendpoints.ec2.services.k8s.aws -n go-3tier-app
+
+kubectl describe vpcendpoints.ec2.services.k8s.aws -n go-3tier-app sts-endpoint
 ```
 
 ## Deploy the AWS Load Balancer Controller using Helm (Not required while using Auto Mode)
@@ -665,7 +729,7 @@ aws ec2 describe-vpc-endpoints \
 kubectl get storageclass
 
 
-# StorageClass when using Auto Mode
+# StorageClass when using Standard Mode
 kubectl apply -f - <<EOF
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
@@ -684,11 +748,38 @@ reclaimPolicy: Delete
 allowVolumeExpansion: true
 EOF
 
+
 # Check for the new storage class
 kubectl get storageclass
 
 # StorageClass when using Standard Mode
 
+```
+
+#### Storage Class when using Auto Mode
+
+```bash
+# Get CSIDriver name, this should match the storageclass provisioner for ebs
+kubectl get csidriver -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+
+
+
+kubectl apply -f - <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: auto-ebs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.eks.amazonaws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+EOF
 ```
 
 #### Create a PersistentVolumeClaim
@@ -830,7 +921,7 @@ kubectl get pods -n kube-system -l app.kubernetes.io/instance=ack-apigateway
 v2-controller
 ```
 
-## VPC Endpoint for API Gateway Execute API
+#### VPC Endpoint for API Gateway Execute API
 
 ```bash
 
@@ -862,16 +953,34 @@ EOF
 kubectl get vpcendpoint -n go-3tier-app
 ```
 
-## Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway)
+#### Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway)
 
-# Note: API Gateway service is only available in specific AZs (us-east-1b, us-east-1c, us-east-1d) in US-EAST-1 Region
+> [!NOTE:]
+> API Gateway service is only available in specific AZs (us-east-1b, us-east-1c, us-east-1d) in US-EAST-1 Region
 
-# We need to find a compatible subnet in one of these zones
+#### We need to find a compatible subnet in one of these zones
 
 ```bash
+# Get API Gateway service AZs for a specific region
+SERVICE_NAME="com.amazonaws.${AWS_REGION}.apigateway"
+
+APIGW_AZS=$(aws ec2 describe-vpc-endpoint-services \
+  --region ${AWS_REGION} \
+  --filters "Name=service-name,Values=${SERVICE_NAME}" \
+  --query 'ServiceDetails[0].AvailabilityZones' \
+  --output json)
+
+echo "API Gateway available in: ${APIGW_AZS}"
+
+# Get private subnets and filter to only those in service AZs
 COMPATIBLE_SUBNET=$(aws ec2 describe-subnets \
-  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=map-public-ip-on-launch,Values=false" "Name=availability-zone,Values=us-east-1b" \
-  --query 'Subnets[0].SubnetId' --output text) && echo "Compatible subnet: ${COMPATIBLE_SUBNET}"
+  --region "${AWS_REGION}" \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=map-public-ip-on-launch,Values=false" \
+  --query 'Subnets[*]' --output json | \
+  jq -r --argjson azs "${APIGW_AZS}" '.[] | select(.AvailabilityZone as $az | $azs | index($az)) | .SubnetId')
+
+echo "Compatible subnet: ${COMPATIBLE_SUBNET}"
+
 
 kubectl apply -f - <<EOF
 apiVersion: ec2.services.k8s.aws/v1alpha1
@@ -910,7 +1019,7 @@ aws ec2 describe-vpc-endpoints \
 
 #### Create security group for the VPC link:
 
-# https://aws-controllers-k8s.github.io/community/reference/ec2/v1alpha1/securitygroup/
+#### https://aws-controllers-k8s.github.io/community/reference/ec2/v1alpha1/securitygroup/
 
 ```bash
 
@@ -986,43 +1095,6 @@ aws apigatewayv2 get-vpc-links \
   --output table
 ```
 
-#### Create IAM Role for ACKApiGatewayV2ControllerRole (Only when using Auto Mode)
-
-```bash
-aws iam create-role \
-  --role-name ACKApiGatewayV2ControllerRole \
-  --assume-role-policy-document file://trust-policy.json
-
-aws iam put-role-policy \
-  --role-name ACKApiGatewayV2ControllerRole \
-  --policy-name VPCLinkPolicy \
-  --policy-document file://vpc-link-policy.json
-
-```
-
-#### Associate the Role with a Namespace (Only when using Auto Mode)
-
-```bash
-eksctl create addon \
-  --cluster $CLUSTER_NAME \
-  --name eks-pod-identity-agent
-
-
-eksctl create pod-identity-association \
-  --cluster $CLUSTER_NAME \
-  --namespace kube-system \
-  --role-arn $(aws iam get-role --role-name ACKApiGatewayV2ControllerRole --query "Role.Arn" --output text) \
-  --service-account ack-apigatewayv2-controller
-
-```
-
-#### Annotate the Deployment (Only when using Auto Mode)
-
-```
-kubectl annotate deployment ack-apigatewayv2-controller-apigatewayv2-chart -n kube-system \
-eks.amazonaws.com/pod-identity=$(aws iam get-role --role-name ACKApiGatewayV2ControllerRole --query "Role.Arn" --output text)
-```
-
 #### Create an AWS HTTP API Gateway Route, VPC Link Integration and Stage: - private integration with AWS VPC **_K8S CRD_**
 
 [Apigatewayv2-reference-example](https://github.com/aws-controllers-k8s/community/blob/main/docs/content/docs/tutorials/apigatewayv2-reference-example.md)
@@ -1030,26 +1102,35 @@ eks.amazonaws.com/pod-identity=$(aws iam get-role --role-name ACKApiGatewayV2Con
 [Manage HTTP APIs with the ACK APIGatewayv2 Controller](https://aws-controllers-k8s.github.io/community/docs/tutorials/apigatewayv2-reference-example/)
 
 ```bash
-# Integration uri should either be for ingress(recommened when using auto mode) or gateway
+# Integration uri should either be for AWS ingress(recommened when using auto mode) or Cilium gateway
 
 #### Find the ALB DNS Name from Ingress (Only when using Auto Mode)
-# ALB_HOSTNAME=$(kubectl get ingress <ingress-name> -n <namespace> -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+ALB_HOSTNAME=$(kubectl get ingress minimal-ingress -n go-3tier-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
 #### Retrieve the ALB ARN Using AWS CLI (Only when using Auto Mode)
-# ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" --output text)
+ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" --output text)
 
 
 API_NAME="ack-api"
 INTEGRATION_NAME="private-nlb-integration"
+# INTEGRATION_URI="$(aws elbv2 describe-listeners \
+#   --load-balancer-arn $(aws elbv2 describe-load-balancers \
+#   --region $AWS_REGION \
+#   --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway -n go-3tier-app \
+#   -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
+#   --output text) \
+#   --region $AWS_REGION \
+#   --query "Listeners[0].ListenerArn" \
+#   --output text)" || INTEGRATION_URI="$ALB_ARN"
 INTEGRATION_URI="$(aws elbv2 describe-listeners \
   --load-balancer-arn $(aws elbv2 describe-load-balancers \
   --region $AWS_REGION \
   --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway -n go-3tier-app \
-  -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
-  --output text) \
+  -o jsonpath="{.status.loadBalancer.ingress[].hostname}" 2>/dev/null)')].LoadBalancerArn" \
+  --output text 2>/dev/null) \
   --region $AWS_REGION \
   --query "Listeners[0].ListenerArn" \
-  --output text)" || INTEGRATION_URI="$ALB_ARN"
+  --output text 2>/dev/null)" || INTEGRATION_URI="$ALB_ARN"
 ROUTE_NAME="ack-route"
 ROUTE_KEY_NAME="ack-route-key"
 STAGE_NAME="\$default"
@@ -1138,7 +1219,6 @@ spec:
 EOF
 
 
-kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status
-.apiEndpoint}' -n go-3tier-app
+kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}' -n go-3tier-app
 
 ```
