@@ -10,10 +10,10 @@
 - \*Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
   > [!NOTE]
   > These addons are deployed automatically as system processes when using Auto Mode.
+- Install the require ACK (AWS Controllers for kubernetes) using EKS Capabilities or HELM, this enables AWS Services like HTTP API Gateway to be provisioned using kubernetes native configurations (CRDs), that's if you want to aviod context switching to other IAC tools like OpenTofu/Terraform
 - Deploy a sample fullstack app with a UI, Worker and Database in a segregated namespace to test the cluster.
 - Securely expose microservices running in the cluster to external traffic using AWS HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API, Route(or Ingress.)
 - Implement end-to-end encryption (Application layer (Layer 7) and IP layer (Layer 3 ) encryption).
-- AWS Services like HTTP API Gateway should be provisioned using kubernetes native configurations (CRDs), that's if you want to aviod context switching to other IAC tools like OpenTofu/Terraform
 
 ![Integration](../images/AWS_EKS.png)
 
@@ -23,9 +23,9 @@
 
 #### Create Kubernetes Cluster with EKSCTL - Standard Mode
 
-- You get to manage and customize the data plane
+- You get to manage and customize the data plane.
 - Decisions on compute, stoarge, networking etc are soley your responsibility.
-- It gives you room for more flexibility, which also increase the time you need to put in to manage and upgrade your infrastructure
+- It gives you room for more flexibility, which also increase the time you need to put in to manage and upgrade your infrastructure.
 
 - Addons: CoreDNS, EBS CSI Driver and eks-pod-identity-agent
 
@@ -35,6 +35,7 @@ export CLUSTER_NAME=basic-cluster
 export AWS_REGION=us-east-1
 export KUBERNETES_VERSION="1.33"
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export APP_NAMESPACE
 
 ```
 
@@ -69,9 +70,6 @@ addons:
     version: latest
   - name: aws-ebs-csi-driver # Installs the AWS EBS CSI Driver addon for dynamic EBS volume provisioning.
     version: latest
-    # resolveConflicts: overwrite
-    # wellKnownPolicies:
-    #   ebsCSIController: true # If true, attaches the required IAM policies for the EBS CSI controller.
 EOF
 ```
 
@@ -86,9 +84,9 @@ EOF
 - Core addons (CoreDNS, VPC-CNI, and EBS CSI Driver) run as systemd processes on worker nodes rather than as Kubernetes pods. Kube-proxy is also managed automatically by Auto Mode.
 - This service costs an additional 12% on top of the standard EC2 instance pricing for the data plane (as of 2025). AWS Auto Mode charges are independent of EC2 instance discounts from Spot, Reserved Instances, or Savings Plans - you still benefit from those discounts on the EC2 costs, but the 12% management fee is calculated separately on the base EC2 price.
 
-#### [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
-
-- ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
+> [!IMPORTANT] > [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
+> ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
+> Examples of using helm as an alternative to install ACK Controllers will be indicated below.
 
 ```bash
 #EKS Auto Mode
@@ -185,7 +183,6 @@ EOF
 #### EKS Capabilities (Managed)
 
 - ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
-- Examples of using helm as an alternative to install ACK Controllers will be indicated below.
 
 ```bash
 # Step 1: Create IAM role for ACK Capability
@@ -220,7 +217,7 @@ eksctl create capability \
   --role-arn arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/ACKCapabilityRole \
   --ack-service-controllers ec2, elasticloadbalancing, apigatewayv2
 
-# Step 4: Verify Capability is Active
+# Verify Capability is Active
 eksctl get capability --cluster ${CLUSTER_NAME_AUTOMODE} --region ${AWS_
 REGION} --name ack -o yaml
 
@@ -232,7 +229,7 @@ kubectl api-resources | grep services.k8s.aws
 
 ```bash
 # Unique Private Subnets in each AZ
-SUBNET_JSON=$(aws eks describe-cluster \
+export SUBNET_JSON=$(aws eks describe-cluster \
   --name ${CLUSTER_NAME} \
   --region ${AWS_REGION} \
   --query 'cluster.resourcesVpcConfig.vpcId' \
@@ -248,7 +245,7 @@ echo "Private subnets (one per AZ): ${SUBNET_JSON}"
 
 
 # Get cluster security group
-CLUSTER_SG=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} \
+export CLUSTER_SG=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} \
   --query 'cluster.resourcesVpcConfig.clusterSecurityGroupId' --output text)
 
 echo ${CLUSTER_SG}
@@ -262,7 +259,10 @@ echo "VPC_CIDR: ${VPC_CIDR}"
 
 ```
 
-#### Create pod identity association to grant the various AWS Controllers and service accounts permissions in AWS; Cilium operator service account, aws-load-balancer-controller, EBS CSI controller and ack-apigatewayv2-controller.
+#### Create pod identity association to grant the various Workloads, AWS Controllers and service accounts permissions in AWS; Cilium operator service account, aws-load-balancer-controller, EBS CSI controller and ack-apigatewayv2-controller.
+
+> [!IMPORTANT]
+> Only while using standard mode.
 
 [Amazon EKS Pod Identity](https://aws.amazon.com/blogs/containers/amazon-eks-pod-identity-a-new-way-for-applications-on-eks-to-obtain-iam-credentials/)
 
@@ -279,7 +279,6 @@ metadata:
 # Creating Pod Identity Associations to grant permissions to AWS Load Balancer controller & API Gateway controller.
 iam:
   # roleARN is not given, eksctl will first create an IAM role with automatically generated roleName,
-  # using the permissionPolicy inline document
   podIdentityAssociations:
   # EBS CSI Driver - ADD THIS ONE
   - namespace: kube-system
@@ -375,7 +374,7 @@ EOF
 #### You can install Cilium in either ENI mode or Overlay mode on an EKS cluster.
 
 - In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI, so the aws-node DaemonSet has to be patched to prevent conflict behavior.
-  - set your API_SERVER_IP and API_SERVER_PORT by using `kubectl cluster-info`
+- Set your API_SERVER_IP and API_SERVER_PORT by using `kubectl cluster-info`
 
 #### Before we install Cilium with Gateway API, we need to make sure we install the Gateway API CRDs
 
@@ -466,13 +465,6 @@ managedNodeGroups:
     - key: "node.cilium.io/agent-not-ready"
       value: "true"
       effect: "NoExecute"
-    # iam:
-    #   withAddonPolicies:
-    #     # ebs: true
-    #     externalDNS: true
-    #     certManager: true
-    #     imageBuilder: true
-    #     awsLoadBalancerController: true
 EOF
 
 
@@ -497,7 +489,10 @@ status: {}
 EOF
 ```
 
-## Depoly relevant Controllers in the EKS Cluster and Grant them the required Permissions to AWS resources.
+## Depoly relevant AWS Kubernetes Controllers (ACK) in the EKS Cluster and Grant them the required Permissions to AWS resources using HELM.
+
+> [!IMPORTANT]
+> This is an alternative to using EKS Capabilities (Managed)
 
 _What are AWS Controllers for Kubernetes (ACK)?_
 
@@ -537,11 +532,13 @@ Key improvements over IRSA:
 
 # List of Controllers to be installed
 
-- API Gateway
 - EC2
+- API Gateway
 - ALB
 
 ## Install ACK EC2 Controller
+
+> [!IMPORTANT] > [Only when not using EKS Managed Capabilities]
 
 #### https://aws-controllers-k8s.github.io/community/docs/tutorials/ec2-example/
 
@@ -664,7 +661,9 @@ kubectl get vpcendpoints.ec2.services.k8s.aws -n go-3tier-app
 kubectl describe vpcendpoints.ec2.services.k8s.aws -n go-3tier-app sts-endpoint
 ```
 
-## Deploy the AWS Load Balancer Controller using Helm (Not required while using Auto Mode)
+## Deploy the AWS Load Balancer Controller using Helm.
+
+> [!IMPORTANT] > [Only when not using EKS Managed Capabilities]
 
 #### Cilium Gateway API will need it to create NLB/ALBs
 
@@ -725,6 +724,9 @@ aws ec2 describe-vpc-endpoints \
 # Create a Storage Class to persist data on Mongo Database
 
 ```bash
+# Get CSIDriver name, this should match the storageclass provisioner for ebs
+kubectl get csidriver -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+
 # Check for the default storage class
 kubectl get storageclass
 
@@ -737,7 +739,7 @@ metadata:
  name: auto-ebs-sc
  annotations:
    storageclass.kubernetes.io/is-default-class: "true"
-provisioner: ebs.csi.aws.com  # Both EKS addon (v1.37+) and Helm use ebs.csi.aws.com (older addons used ebs.csi.eks.amazonaws.com)
+provisioner: ebs.csi.aws.com  # Both EKS Standard mode addon (v1.37+) and Helm use ebs.csi.aws.com (Auto mode addon uses ebs.csi.eks.amazonaws.com)
 parameters:
  type: gp3                 # Specifies the volume type (gp3)
  fsType: ext4              # Filesystem type
@@ -754,32 +756,6 @@ kubectl get storageclass
 
 # StorageClass when using Standard Mode
 
-```
-
-#### Storage Class when using Auto Mode
-
-```bash
-# Get CSIDriver name, this should match the storageclass provisioner for ebs
-kubectl get csidriver -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
-
-
-
-kubectl apply -f - <<EOF
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: auto-ebs-sc
-  annotations:
-    storageclass.kubernetes.io/is-default-class: "true"
-provisioner: ebs.csi.eks.amazonaws.com
-parameters:
-  type: gp3
-  iops: "3000"
-  throughput: "125"
-  encrypted: "true"
-volumeBindingMode: WaitForFirstConsumer
-reclaimPolicy: Delete
-EOF
 ```
 
 #### Create a PersistentVolumeClaim
@@ -810,8 +786,6 @@ kubectl get pvc -n go-3tier-app
 ```bash
 kubectl apply -f app/.
 
-kubectl get svc  -n go-3tier-app frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-
 kubectl get pods -n go-3tier-app
 ```
 
@@ -820,6 +794,9 @@ kubectl get pods -n go-3tier-app
 ## Service Networking
 
 #### Gateway API (Cilium implementation) (North/South Traffic) - accepting traffic into the cluster. This creates an internal NLB (Network Load Balancer) that accepts external traffic from AWS API Gateway
+
+> [!IMPORTANT]
+> Only when using standard mode
 
 - GatewayClass, deployed when cilium is been installed (gatewayAPI.enabled=true)
 - Gateway
@@ -845,7 +822,6 @@ spec:
         from: All
 EOF
 
----
 
 # HTTProute config
 kubectl apply -f - <<EOF
@@ -884,11 +860,77 @@ kubectl get svc -n go-3tier-app
 
 #### [Create an AWS IngressClass to configure an Application Load Balancer](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html)
 
-#### Recommended when using auto mode, because the aws vpc cni is baked in as a systemd process and can't be changed to Cilium CNI as off writing this guide in 2025.
+#### Recommended when using auto mode, because the AWS VPC CNI is baked in as a systemd process.
+
+> [!IMPORTANT]
+> Only when using Auto mode
 
 ```bash
 
-kubectl apply -f ingress/.
+# Ingress Class
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: alb
+  annotations:
+    # Use this annotation to set an IngressClass as Default
+    # If an Ingress doesn't specify a class, it will use the Default
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  # Configures the IngressClass to use EKS Auto Mode
+  controller: eks.amazonaws.com/alb
+  parameters:
+    apiGroup: eks.amazonaws.com
+    kind: IngressClassParams
+    # Use the name of the IngressClassParams set in the previous step
+    name: alb
+EOF
+
+# Ingress Class Parameters
+
+kubectl apply -f - <<EOF
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: alb
+spec:
+  scheme: internal
+EOF
+
+# Ingress
+
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minimal-ingress
+  namespace: go-3tier-app
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # Use AWS ALB
+    ingressClassName: alb
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /api/record
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 8080
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 8080
+EOF
 
 
 ## Check Status
@@ -898,6 +940,8 @@ kubectl get ingress -n go-3tier-app
 ## Create API Gateway resources - handling East/West Traffic
 
 #### Deploy ACK Controller for API Gateway
+
+> [!IMPORTANT] > [Only when not using EKS Managed Capabilities]
 
 [Installing AWS Service Controllers](https://aws-controllers-k8s.github.io/community/docs/user-docs/install/)
 **_Helm charts for ACK service controllers can be found in the_** [ACK registry within the Amazon ECR Public Gallery](https://gallery.ecr.aws/aws-controllers-k8s) To find a Helm chart for a specific service, you can go to gallery.ecr.aws/aws-controllers-k8s/$SERVICENAME-chart. For example, the link to the ACK service controller Helm chart for Amazon Simple Storage Service (Amazon S3) is gallery.ecr.aws/aws-controllers-k8s/s3-chart.
@@ -1113,15 +1157,6 @@ ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$A
 
 API_NAME="ack-api"
 INTEGRATION_NAME="private-nlb-integration"
-# INTEGRATION_URI="$(aws elbv2 describe-listeners \
-#   --load-balancer-arn $(aws elbv2 describe-load-balancers \
-#   --region $AWS_REGION \
-#   --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway -n go-3tier-app \
-#   -o jsonpath="{.status.loadBalancer.ingress[].hostname}")')].LoadBalancerArn" \
-#   --output text) \
-#   --region $AWS_REGION \
-#   --query "Listeners[0].ListenerArn" \
-#   --output text)" || INTEGRATION_URI="$ALB_ARN"
 INTEGRATION_URI="$(aws elbv2 describe-listeners \
   --load-balancer-arn $(aws elbv2 describe-load-balancers \
   --region $AWS_REGION \
