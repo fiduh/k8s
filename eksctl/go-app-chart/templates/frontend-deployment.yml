@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.app.ui.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.app.ui.name }}
+spec:
+  {{- with .Values.app.ui }}
+  replicas: {{ .replicas }}
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+    spec:
+      securityContext:
+          seccompProfile:
+            type: RuntimeDefault  
+          runAsUser: 1001
+          runAsGroup: 1001 
+          fsGroup: 1001 
+          runAsNonRoot: true
+      containers:
+      - name: {{ .name }}
+        image: {{ .image.repository }}:{{ .image.tag }}
+        ports:
+        - containerPort: {{ .port }}
+        env:
+        - name: VITE_BACKEND_URL
+          valueFrom: # Reference the backend service
+            configMapKeyRef:
+              name: {{ $.Release.Name }}-{{ $.name }}
+              key: VITE_BACKEND_URL
+        securityContext:
+          allowPrivilegeEscalation: false
+          privileged: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+        volumeMounts:
+        - name: nginx-tmp
+          mountPath: /opt/bitnami/nginx/tmp
+      volumes:
+      - name: nginx-tmp
+        emptyDir: {}
+  {{- end }}
+---
+
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.app.ui.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.app.ui.name }}
+  # annotations:
+  #   service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing # Makes the LB internet-facing
+spec:
+  {{- with .Values.app.ui }}
+  type: {{ .service.type }}
+  selector:
+    app: {{ .name }}
+  ports:
+    - protocol: {{ .service.protocol }}
+      port: {{ .service.port }}
+      targetPort: {{ .service.targetPort }}
+  {{- end }}

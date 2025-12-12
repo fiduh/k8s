@@ -1,17 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mongo-deployment
-  namespace: go-3tier-app
+  name: {{ .Release.Name }}-{{ .Values.app.db.name }}
+  namespace: {{ .Release.Namespace }}
+{{- with .Values.app.db }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: mongo
+      app: {{ .name }}
   template:
     metadata:
       labels:
-        app: mongo
+        app: {{ .name }}
     spec:
       securityContext:
         seccompProfile:
@@ -21,11 +22,11 @@ spec:
         fsGroup: 2002
         runAsNonRoot: true
       containers:
-        - name: mongo
-          image: mongodb/mongodb-community-server:8.0-ubuntu2204
+        - name: {{ .name }}
+          image: {{ .image.repository }}:{{ .image.tag }}
           # args: ["--unixSocketPrefix", "/data/db/tmp"]
           ports:
-            - containerPort: 27017
+            - containerPort: {{ .port }}
           volumeMounts:
             - name: mongo-storage
               mountPath: /data/db
@@ -39,41 +40,26 @@ spec:
               drop:
                 - ALL
       volumes:
-        # - name: mongo-storage
-        #   hostPath:
-        #     path: /tmp/mongo-data  # Replace with a suitable path
-        #     type: DirectoryOrCreate
         - name: mongo-storage
           persistentVolumeClaim:
             claimName: mongo-pvc
         - name: tmp-storage
           emptyDir: {} # Writable temporary storage for MongoDB operations
+  {{- end }}
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: mongo-service
-  namespace: go-3tier-app
+  name: {{ .Release.Name }}-{{ .Values.app.db.name }}
+  namespace: {{ .Release.Namespace }}
 spec:
+  {{- with .Values.app.db}}
   selector:
-    app: mongo
+    app: {{ .name }}
   ports:
-    - protocol: TCP
-      port: 27017
-      targetPort: 27017
-  type: ClusterIP
-
----
-# apiVersion: v1
-# kind: PersistentVolumeClaim
-# metadata:
-#   name: mongo-pvc
-# spec:
-#   accessModes:
-#     - ReadWriteOnce
-#   resources:
-#     requests:
-#       storage: 1Gi
-#   storageClassName: local-storage
-
+    - protocol: {{ .service.protocol }}
+      port: {{ .service.port }}
+      targetPort: {{ .service.targetPort }}
+  type: {{ .service.type }}
+  {{- end }}

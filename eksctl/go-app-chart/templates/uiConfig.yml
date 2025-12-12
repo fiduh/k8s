@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ .Release.Name }}-{{ .Values.app.ui.name }}
+data:
+  {{- with .Values.app.ui.config }}
+  VITE_BACKEND_URL: {{ .backendUrl }}
+  {{- end }}

@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.app.backend.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- with .Values.app.backend }}
+  replicas: {{ .replicas }}
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+    spec:
+      securityContext:
+          seccompProfile:
+            type: RuntimeDefault
+          runAsUser: 1000
+          runAsGroup: 3000 
+          fsGroup: 2000 
+          runAsNonRoot: true
+      containers:
+      - name: {{ .name }}
+        image: {{ .image.repository }}:{{ .image.tag }}
+        imagePullPolicy: {{ .image.imagePullPolicy }}
+        ports:
+        - containerPort: {{ .port }}
+        env:
+        - name: MONGO_URI
+          valueFrom:
+            configMapKeyRef:
+              name: {{ $.Release.Name }}-{{ .name }}
+              key: MONGO_URI
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ $.Release.Name }}-{{ .name }}
+              key: PORT
+        securityContext:
+          allowPrivilegeEscalation: false
+          privileged: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+  {{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.app.backend.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- with .Values.app.backend}}
+  selector:
+    app: {{ .name }}
+  ports:
+    - protocol: {{ .service.protocol }}
+      port: {{ .service.port }}
+      targetPort: {{ .service.targetPort }}
+  type: {{ .service.type }}
+  {{- end }}

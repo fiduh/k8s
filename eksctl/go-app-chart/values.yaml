@@ -1,0 +1,127 @@
+# Default values for go-app-chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+app:
+  ui:
+    name: frontend
+    image:
+      repository: acekloudnative/go-3-tier-app-ui
+      tag: v0.1.6
+    port: 8080
+    replicas: 1
+    service:
+      type: ClusterIP
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    config:
+      backendUrl: http://backend-service:8080
+  backend:
+    name: backend
+    image:
+      repository: acekloudnative/go-3-tier-app-backend
+      tag: v0.1.1
+      imagePullPolicy: IfNotPresent
+    port: 8080
+    replicas: 1
+    service:
+      type: ClusterIP
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    config:
+      uri: mongodb://mongo-service:27017/learn_k8
+      port: ":8080"
+  db:
+    name: mongo
+    image:
+      repository: mongodb/mongodb-community-server
+      tag: 8.0-ubuntu2204
+    replicas: 1
+    service:
+      type: ClusterIP
+      port: 27017
+      targetPort: 27017
+      protocol: TCP
+
+podSecurityContext:
+  {}
+  # fsGroup: 2000
+
+securityContext:
+  {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# This block is for setting up the ingress for more information can be found here: https://kubernetes.io/docs/concepts/services-networking/ingress/
+ingress:
+  enabled: false
+  className: ""
+  annotations:
+    {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+resources:
+  {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+
+# This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+# Additional volumes on the output Deployment definition.
+volumes: []
+# - name: foo
+#   secret:
+#     secretName: mysecret
+#     optional: false
+
+# Additional volumeMounts on the output Deployment definition.
+volumeMounts: []
+# - name: foo
+#   mountPath: "/etc/foo"
+#   readOnly: true
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
