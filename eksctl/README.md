@@ -779,14 +779,18 @@ EOF
 kubectl get pvc -n go-3tier-app
 ```
 
-#### Deploy app using Deployment, Service, PVC, ConfigMap
-
-- Use ConfigMaps to pass configuration data to the deployments.
+#### Deploy app Helm (Deployment, Service, ConfigMap)
 
 ```bash
-kubectl apply -f app/.
+# Add helm repo
+helm repo add go-app-chart https://fiduh.github.io/k8s/eksctl/go-app-chart/charts
 
-kubectl get pods -n go-3tier-app
+helm search repo go-app-chart
+
+
+helm install go-3tier-app go-app-chart/go-app-chart -n go-3tier-app
+
+kubectl get pods,svc -n go-3tier-app
 ```
 
 ## Directing external user traffic to the application running in the cluster.
