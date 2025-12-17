@@ -17,7 +17,32 @@
 
 ![Integration](../images/AWS_EKS.png)
 
-#### Prerequisite: Install [eksctl, kubectl](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html), [aws-cli](https://docs.aws.amazon.com/eks/latest/userguide/install-awscli.html) in your dev environment.
+## Prerequisites Checklist
+
+- [ ] AWS CLI configured with appropriate credentials
+- [ ] kubectl v1.33+ installed
+- [ ] eksctl v0.195.0+ installed
+- [ ] Helm v3.12+ installed
+- [ ] jq installed for JSON parsing
+- [ ] Decide: Auto Mode vs Standard Mode (see comparison below)
+
+## Decision Matrix: Auto Mode vs Standard Mode
+
+| Factor                 | Auto Mode                     | Standard Mode         |
+| ---------------------- | ----------------------------- | --------------------- |
+| Management overhead    | Minimal                       | High                  |
+| Cost                   | Base + 12%                    | Base only             |
+| Customization          | Limited                       | Full control          |
+| Upgrade responsibility | AWS                           | You                   |
+| Best for               | Teams prioritizing simplicity | Teams needing control |
+
+## Architecture Decision Points
+
+Before proceeding, answer these questions:
+
+1. **CNI Choice**: Using Cilium (Standard) or AWS VPC CNI (Auto)?
+2. **Ingress Strategy**: Gateway API or AWS Ingress Controller?
+3. **ACK Installation**: Managed Capabilities or Helm?
 
 ## Create a Kubernetes Cluster using EKS Auto or Standard Mode.
 
@@ -35,7 +60,7 @@ export CLUSTER_NAME=basic-cluster
 export AWS_REGION=us-east-1
 export KUBERNETES_VERSION="1.33"
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-export APP_NAMESPACE
+export APP_NAMESPACE="go-3tier-app"
 
 ```
 
@@ -84,10 +109,6 @@ EOF
 - Core addons (CoreDNS, VPC-CNI, and EBS CSI Driver) run as systemd processes on worker nodes rather than as Kubernetes pods. Kube-proxy is also managed automatically by Auto Mode.
 - This service costs an additional 12% on top of the standard EC2 instance pricing for the data plane (as of 2025). AWS Auto Mode charges are independent of EC2 instance discounts from Spot, Reserved Instances, or Savings Plans - you still benefit from those discounts on the EC2 costs, but the 12% management fee is calculated separately on the base EC2 price.
 
-> [!IMPORTANT] > [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
-> ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
-> Examples of using helm as an alternative to install ACK Controllers will be indicated below.
-
 ```bash
 #EKS Auto Mode
 
@@ -111,16 +132,6 @@ autoModeConfig:
 #  nodeRoleARN: ""
 addonsConfig:
   autoApplyPodIdentityAssociations: true
-
-# Define the EKS Capabilities, AWS handles controller installation, updates, and scaling for you.
-capabilities:
-  - name: ack-capability
-    type: ACK
-    attachPolicyARNs:
-      - arn:aws:iam::aws:policy/AdministratorAccess # Use more restrictive policies in production
-    tags:
-      Environment: dev
-      Team: platform
 
 vpc:
   nat:
@@ -182,44 +193,35 @@ EOF
 
 #### EKS Capabilities (Managed)
 
-- ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
+> [!IMPORTANT] > [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
+> ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
+> Examples of using helm as an alternative to install ACK Controllers will be indicated below.
 
 ```bash
-# Step 1: Create IAM role for ACK Capability
-aws iam create-role \
-  --role-name ACKCapabilityRole \
-  --assume-role-policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "capabilities.eks.amazonaws.com"
-      },
-      "Action": [
-      "sts:AssumeRole",
-      "sts:TagSession"
-      ]
-    }]
-  }'
 
-# Step 2: Attach the AdministratorAccess managed policy to the role:
-
-aws iam attach-role-policy \
-  --role-name ACKCapabilityRole \
-  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
-
-# Step 3: Step 3: Create ACK Capability Using eksctl
+# Create ACK Capability Using eksctl
 eksctl create capability \
   --cluster ${CLUSTER_NAME} \
   --region ${AWS_REGION} \
   --name ack \
   --type ACK \
-  --role-arn arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/ACKCapabilityRole \
-  --ack-service-controllers ec2, elasticloadbalancing, apigatewayv2
+  --role-arn arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/ACKCapabilityRole
 
 # Verify Capability is Active
-eksctl get capability --cluster ${CLUSTER_NAME_AUTOMODE} --region ${AWS_
+eksctl get capability --cluster ${CLUSTER_NAME} --region ${AWS_
 REGION} --name ack -o yaml
+
+# Get the Capability Role Name
+export capabilityRoleArn=$(eksctl get capability --cluster ${CLUSTER_NAME} --region ${AWS_REGION} --name ack -o yaml | grep roleArn | sed 's/.*roleArn: //')
+
+echo $capabilityRoleArn
+
+CAPABILITY_ROLE_NAME="${capabilityRoleArn##*/}"
+
+echo $CAPABILITY_ROLE_NAME
+
+# Attach the AdministratorAccess managed policy to the role:
+aws iam attach-role-policy --role-name $CAPABILITY_ROLE_NAME --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
 
 # Verify CRDs are available
 kubectl api-resources | grep services.k8s.aws
@@ -426,6 +428,9 @@ helm install cilium cilium/cilium --version 1.18.4 \
 
 ## Deploy Managed NodeGroups where the workloads can run.
 
+> [!IMPORTANT]
+> Only while using standard mode.
+
 - AMI is BottleRocket
 - Taint the Nodes (application pods are not scheduled/executed until Cilium is deployed)
 
@@ -483,7 +488,7 @@ kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: go-3tier-app
+  name: ${APP_NAMESPACE}
 spec: {}
 status: {}
 EOF
@@ -565,7 +570,7 @@ apiVersion: ec2.services.k8s.aws/v1alpha1
 kind: SecurityGroup
 metadata:
   name: endpoints-sg
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   description: "Endpoints security group"
   name: SG_ENDPOINTS
@@ -586,7 +591,9 @@ spec:
           description: "Allow HTTPS outbound"
 EOF
 
-kubectl describe securitygroup -n go-3tier-app
+kubectl describe securitygroup -n $APP_NAMESPACE
+
+kubectl get securitygroup -n $APP_NAMESPACE -oyaml
 ```
 
 ## Create VPC endpoints so the controller (e.g CSI-EBS controller) can reach AWS APIs:
@@ -598,7 +605,7 @@ apiVersion: ec2.services.k8s.aws/v1alpha1
 kind: VPCEndpoint
 metadata:
   name: ec2-api-endpoint
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   vpcID: ${VPC_ID}
   serviceName: com.amazonaws.${AWS_REGION}.ec2
@@ -607,7 +614,7 @@ spec:
   securityGroupRefs:
     - from:
         name: endpoints-sg  # Reference the API Gateway Endpoint SG
-        namespace: go-3tier-app
+        namespace: ${APP_NAMESPACE}
   privateDNSEnabled: true
   tags:
     - key: Name
@@ -619,7 +626,7 @@ spec:
 EOF
 
 # Check the resource status
-kubectl describe vpcendpoint ec2-api-endpoint -n go-3tier-app
+kubectl describe vpcendpoint ec2-api-endpoint -n $APP_NAMESPACE
 
 # Verify in AWS
 aws ec2 describe-vpc-endpoints \
@@ -636,7 +643,7 @@ apiVersion: ec2.services.k8s.aws/v1alpha1
 kind: VPCEndpoint
 metadata:
   name: sts-endpoint
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   vpcID: ${VPC_ID}
   serviceName: com.amazonaws.${AWS_REGION}.sts
@@ -645,7 +652,7 @@ spec:
   securityGroupRefs:
     - from:
         name: endpoints-sg
-        namespace: go-3tier-app
+        namespace: ${APP_NAMESPACE}
   privateDNSEnabled: true
   tags:
     - key: Name
@@ -656,9 +663,9 @@ spec:
       value: Pod-Identity
 EOF
 
-kubectl get vpcendpoints.ec2.services.k8s.aws -n go-3tier-app
+kubectl get vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE
 
-kubectl describe vpcendpoints.ec2.services.k8s.aws -n go-3tier-app sts-endpoint
+kubectl describe vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE sts-endpoint
 ```
 
 ## Deploy the AWS Load Balancer Controller using Helm.
@@ -693,7 +700,7 @@ apiVersion: ec2.services.k8s.aws/v1alpha1
 kind: VPCEndpoint
 metadata:
   name: elasticloadbalancing-endpoint
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   vpcID: ${VPC_ID}
   serviceName: com.amazonaws.${AWS_REGION}.elasticloadbalancing
@@ -702,7 +709,7 @@ spec:
   securityGroupRefs:
     - from:
         name: endpoints-sg  # Reference the Endpoint SG
-        namespace: go-3tier-app
+        namespace: ${APP_NAMESPACE}
   privateDNSEnabled: true
   tags:
     - key: Name
@@ -710,7 +717,7 @@ spec:
 EOF
 
 # Check the resource status
-kubectl describe vpcendpoint ec2-api-endpoint -n go-3tier-app
+kubectl describe vpcendpoint ec2-api-endpoint -n $APP_NAMESPACE
 
 # Verify on AWS
 aws ec2 describe-vpc-endpoints \
@@ -727,6 +734,9 @@ aws ec2 describe-vpc-endpoints \
 # Get CSIDriver name, this should match the storageclass provisioner for ebs
 kubectl get csidriver -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
 
+export provisioner=$(kubectl get csidriver -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep '^ebs')
+echo "EBS StorageClass Provisioner: $provisioner"
+
 # Check for the default storage class
 kubectl get storageclass
 
@@ -739,7 +749,7 @@ metadata:
  name: auto-ebs-sc
  annotations:
    storageclass.kubernetes.io/is-default-class: "true"
-provisioner: ebs.csi.aws.com  # Both EKS Standard mode addon (v1.37+) and Helm use ebs.csi.aws.com (Auto mode addon uses ebs.csi.eks.amazonaws.com)
+provisioner: ${provisioner}  # EKS Standard mode addon (v1.37+) use ebs.csi.aws.com (Auto mode addon uses ebs.csi.eks.amazonaws.com)
 parameters:
  type: gp3                 # Specifies the volume type (gp3)
  fsType: ext4              # Filesystem type
@@ -754,8 +764,6 @@ EOF
 # Check for the new storage class
 kubectl get storageclass
 
-# StorageClass when using Standard Mode
-
 ```
 
 #### Create a PersistentVolumeClaim
@@ -766,7 +774,7 @@ kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
   name: mongo-pvc
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -776,21 +784,21 @@ spec:
       storage: 1Gi
 EOF
 
-kubectl get pvc -n go-3tier-app
+kubectl get pvc -n $APP_NAMESPACE
 ```
 
 #### Deploy app Helm (Deployment, Service, ConfigMap)
 
 ```bash
 # Add helm repo
-helm repo add go-app-chart https://fiduh.github.io/k8s/eksctl/go-app-chart/charts
+helm repo add go-app-chart https://fiduh.github.io/k8s/eksctl/charts
 
 helm search repo go-app-chart
 
 
-helm install go-3tier-app go-app-chart/go-app-chart -n go-3tier-app
+helm install go-3tier-app go-app-chart/go-app-chart -n $APP_NAMESPACE
 
-kubectl get pods,svc -n go-3tier-app
+kubectl get pods,svc -n $APP_NAMESPACE
 ```
 
 ## Directing external user traffic to the application running in the cluster.
@@ -814,7 +822,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: my-gateway
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   gatewayClassName: cilium
   listeners:
@@ -833,7 +841,7 @@ apiVersion: gateway.networking.k8s.io/v1beta1
 kind: HTTPRoute
 metadata:
   name: combined-route
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   parentRefs:
     - name: my-gateway
@@ -854,10 +862,10 @@ spec:
           port: 8080
 EOF
 
-kubectl get httproute -n go-3tier-app
-kubectl get gateway -n go-3tier-app
+kubectl get httproute -n $APP_NAMESPACE
+kubectl get gateway -n $APP_NAMESPACE
 
-kubectl get svc -n go-3tier-app
+kubectl get svc -n $APP_NAMESPACE
 ```
 
 ## OR
@@ -909,7 +917,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: minimal-ingress
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     # Use AWS ALB
@@ -938,7 +946,7 @@ EOF
 
 
 ## Check Status
-kubectl get ingress -n go-3tier-app
+kubectl get ingress -n $APP_NAMESPACE
 ```
 
 ## Create API Gateway resources - handling East/West Traffic
@@ -978,7 +986,7 @@ apiVersion: ec2.services.k8s.aws/v1alpha1
 kind: VPCEndpoint
 metadata:
   name: apigateway-endpoint
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   vpcID: ${VPC_ID}
   serviceName: com.amazonaws.us-east-1.execute-api
@@ -989,7 +997,7 @@ spec:
   securityGroupRefs:
     - from:
         name: endpoints-sg  # Reference the Endpoint SG
-        namespace: go-3tier-app
+        namespace: ${APP_NAMESPACE}
   privateDNSEnabled: true
   tags:
     - key: Name
@@ -998,7 +1006,7 @@ spec:
       value: ACK
 EOF
 
-kubectl get vpcendpoint -n go-3tier-app
+kubectl get vpcendpoint -n $APP_NAMESPACE
 ```
 
 #### Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway)
@@ -1035,7 +1043,7 @@ apiVersion: ec2.services.k8s.aws/v1alpha1
 kind: VPCEndpoint
 metadata:
   name: apigateway-management-endpoint
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   vpcID: ${VPC_ID}
   serviceName: com.amazonaws.${AWS_REGION}.apigateway
@@ -1045,7 +1053,7 @@ spec:
   securityGroupRefs:
     - from:
         name: endpoints-sg  # Reference the Endpoint SG
-        namespace: go-3tier-app
+        namespace: ${APP_NAMESPACE}
   privateDNSEnabled: true
   tags:
     - key: Name
@@ -1056,7 +1064,7 @@ spec:
       value: ACK-APIGateway-Controller
 EOF
 
-kubectl get vpcendpoint -n go-3tier-app
+kubectl get vpcendpoint -n $APP_NAMESPACE
 
 
 aws ec2 describe-vpc-endpoints \
@@ -1076,7 +1084,7 @@ apiVersion: ec2.services.k8s.aws/v1alpha1
 kind: SecurityGroup
 metadata:
   name: sg-vpc-link
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   description: "ack security group"
   name: SG_VPC_LINK
@@ -1110,7 +1118,7 @@ export VPCLINK_SG=$(aws ec2 describe-security-groups \
   --query "SecurityGroups[0].GroupId" \
   --output text)
 
-kubectl get securitygroup -n go-3tier-app
+kubectl get securitygroup -n $APP_NAMESPACE
 
 echo $VPCLINK_SG
 ```
@@ -1124,7 +1132,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: VPCLink
 metadata:
   name: nlb-internal
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   name: nlb-internal
   securityGroupIDs:
@@ -1133,7 +1141,7 @@ spec:
 EOF
 
 
-kubectl get vpclinks.apigatewayv2.services.k8s.aws -n go-3tier-app
+kubectl get vpclinks.apigatewayv2.services.k8s.aws -n $APP_NAMESPACE
 
 aws apigatewayv2 get-vpc-links --region $AWS_REGION
 
@@ -1153,7 +1161,7 @@ aws apigatewayv2 get-vpc-links \
 # Integration uri should either be for AWS ingress(recommened when using auto mode) or Cilium gateway
 
 #### Find the ALB DNS Name from Ingress (Only when using Auto Mode)
-ALB_HOSTNAME=$(kubectl get ingress minimal-ingress -n go-3tier-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+ALB_HOSTNAME=$(kubectl get ingress minimal-ingress -n $APP_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
 #### Retrieve the ALB ARN Using AWS CLI (Only when using Auto Mode)
 ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" --output text)
@@ -1164,7 +1172,7 @@ INTEGRATION_NAME="private-nlb-integration"
 INTEGRATION_URI="$(aws elbv2 describe-listeners \
   --load-balancer-arn $(aws elbv2 describe-load-balancers \
   --region $AWS_REGION \
-  --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway -n go-3tier-app \
+  --query "LoadBalancers[?contains(DNSName, '$(kubectl get service cilium-gateway-my-gateway -n $APP_NAMESPACE \
   -o jsonpath="{.status.loadBalancer.ingress[].hostname}" 2>/dev/null)')].LoadBalancerArn" \
   --output text 2>/dev/null) \
   --region $AWS_REGION \
@@ -1174,7 +1182,7 @@ ROUTE_NAME="ack-route"
 ROUTE_KEY_NAME="ack-route-key"
 STAGE_NAME="\$default"
 
-VPC_LINK_ID=$(kubectl get -n go-3tier-app vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')
+VPC_LINK_ID=$(kubectl get -n $APP_NAMESPACE vpclinks.apigatewayv2.services.k8s.aws nlb-internal -o jsonpath='{.status.vpcLinkID}')
 
 
 echo $INTEGRATION_URI
@@ -1188,7 +1196,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: API
 metadata:
   name: "${API_NAME}"
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   name: "${API_NAME}"
   protocolType: HTTP
@@ -1209,7 +1217,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Integration
 metadata:
   name: "${INTEGRATION_NAME}"
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   apiRef:
     from:
@@ -1229,7 +1237,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Route
 metadata:
   name: "${API_NAME}"
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   apiRef:
     from:
@@ -1247,7 +1255,7 @@ apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
 kind: Stage
 metadata:
   name: "default"
-  namespace: go-3tier-app
+  namespace: ${APP_NAMESPACE}
 spec:
   apiRef:
     from:
@@ -1258,6 +1266,6 @@ spec:
 EOF
 
 
-kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}' -n go-3tier-app
+kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}' -n $APP_NAMESPACE
 
 ```
