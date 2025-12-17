@@ -798,7 +798,7 @@ helm repo update go-app-chart
 helm search repo go-app-chart
 
 
-helm install go-3tier-app go-app-chart/go-app-chart -n $APP_NAMESPACE
+helm install goapp go-app-chart/go-app-chart -n $APP_NAMESPACE
 
 kubectl get pods,svc -n $APP_NAMESPACE
 ```
