@@ -1,0 +1,29 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+apiVersion: v2
+appVersion: 0.1.0
+description: A Helm chart for 3 tier Go App (UI, Backend, Database)
+maintainers:
+- - email: fiduh987@gmail.com
+  name: aceklnoudnative
+name: go-app-chart
+type: application
+version: 0.1.0
+
+...
+files:
+  go-app-chart-0.1.0.tgz: sha256:1a2b8b46ba7c108abafedb2d5393fbed07c1dcce91647cd306d36d2d2a23dc2e
+-----BEGIN PGP SIGNATURE-----
+
+wsDcBAEBCgAQBQJpQo0CCRBNWD/VfzlRyAAABPcMAC9WckmdfjIbFF7IGOZqtsvj
+hJkwNQCaVXKzIekgfsHwrzeAqKqMtv+ar/+g5/JvAM5tgLoLqKa7tpiMsqNUnlyG
+f3tEPxv/vLgduuHrfMwTjTeXUrcboJELGFhJgnSqO26slA7tZPMSQtBxyGNaj02E
+kBBOSJZ0YF9y5+05sD5zVaP2Hd2Zcwzu5nK33G90Q/ax9VNL8Sc0zpwh+g4rM0C4
+u4OiBIy3jnlmoToTRU6xJH3hfo0oWlgSs/kUwB4vWNdSZ0gmTZaNdiosyOg9LXCv
+gUaef6xncPMatnk/nt1i/k4k/ECL2osRHE30CEyDv86IxphT8JFSlPA8kTeSflPW
+7GJRtLG5iewkuHWq8Izy4jJMwoIUjngr7Q7cS4j3wre0voYdg9tUtO6gVIE6MaKw
+LExmXtd98+eELHVZI8nXZ0i1VrvgcoOtpUkEZdu3/TwYxLl0rc7WpFamc1jnmVk1
+nzCnjM5s463sXdLwOd9JI+GnE6FR7mxAJEMrB0KgnQ==
+=0iUi
+-----END PGP SIGNATURE-----
