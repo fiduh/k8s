@@ -793,6 +793,8 @@ kubectl get pvc -n $APP_NAMESPACE
 # Add helm repo
 helm repo add go-app-chart https://fiduh.github.io/k8s/eksctl/charts
 
+helm repo update go-app-chart
+
 helm search repo go-app-chart
 
 

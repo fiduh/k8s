@@ -3,9 +3,9 @@ entries:
   go-app-chart:
   - apiVersion: v2
     appVersion: 0.1.0
-    created: "2025-12-17T12:04:53.300283+01:00"
+    created: "2025-12-17T12:31:27.171367+01:00"
     description: A Helm chart for 3 tier Go App (UI, Backend, Database)
-    digest: 1a2b8b46ba7c108abafedb2d5393fbed07c1dcce91647cd306d36d2d2a23dc2e
+    digest: 9c7447bfee6e19a3794397d71f6bc0b13c7204aae2e42ed7e56c14a609ec9fec
     maintainers:
     - email: fiduh987@gmail.com
       name: aceklnoudnative
@@ -14,4 +14,4 @@ entries:
     urls:
     - https://fiduh.github.io/k8s/eksctl/charts/go-app-chart-0.1.0.tgz
     version: 0.1.0
-generated: "2025-12-17T12:04:53.296489+01:00"
+generated: "2025-12-17T12:31:27.169976+01:00"
