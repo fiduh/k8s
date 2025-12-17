@@ -32,7 +32,7 @@ spec:
         - name: VITE_BACKEND_URL
           valueFrom: # Reference the backend service
             configMapKeyRef:
-              name: {{ $.Release.Name }}-{{ $.name }}
+              name: {{ $.Release.Name }}-{{ .name }}
               key: VITE_BACKEND_URL
         securityContext:
           allowPrivilegeEscalation: false

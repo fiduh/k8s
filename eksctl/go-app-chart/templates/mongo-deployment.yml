@@ -26,7 +26,7 @@ spec:
           image: {{ .image.repository }}:{{ .image.tag }}
           # args: ["--unixSocketPrefix", "/data/db/tmp"]
           ports:
-            - containerPort: {{ .port }}
+            - containerPort: {{ .service.port }}
           volumeMounts:
             - name: mongo-storage
               mountPath: /data/db
