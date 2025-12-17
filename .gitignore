@@ -3,4 +3,4 @@
 /eksctl/apigwv2-httpapi.yaml
 /eksctl/nginx*
 /eksctl/dump.yml
-/learn-k8s
+/eksctl/learn-k8s
