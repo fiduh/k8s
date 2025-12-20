@@ -7,10 +7,12 @@
 
 - _Create an EKS Cluster using Auto mode or Standard Mode_
 - Key considerations while using either of the two Modes
-- \*Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
-  > [!NOTE]
-  > These addons are deployed automatically as system processes when using Auto Mode.
-- Install the require ACK (AWS Controllers for kubernetes) using EKS Capabilities or HELM, this enables AWS Services like HTTP API Gateway to be provisioned using kubernetes native configurations (CRDs), that's if you want to aviod context switching to other IAC tools like OpenTofu/Terraform
+- Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
+
+> [!NOTE]
+> These addons are deployed automatically as system processes when using Auto Mode.
+
+- Install the require ACK (AWS Controllers for kubernetes) using EKS Capabilities or HELM, this enables AWS Services like HTTP API Gateway to be provisioned using kubernetes native configurations (CRDs), that's if you want to aviod context switching to other IaC tools like OpenTofu/Terraform
 - Deploy a sample fullstack app with a UI, Worker and Database in a segregated namespace to test the cluster.
 - Securely expose microservices running in the cluster to external traffic using AWS HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API, Route(or Ingress.)
 - Implement end-to-end encryption (Application layer (Layer 7) and IP layer (Layer 3 ) encryption).
@@ -44,6 +46,17 @@ Before proceeding, answer these questions:
 2. **Ingress Strategy**: Gateway API or AWS Ingress Controller?
 3. **ACK Installation**: Managed Capabilities or Helm?
 
+#### Set essential environmental variables
+
+```bash
+export CLUSTER_NAME=basic-cluster
+export AWS_REGION=us-east-1
+export KUBERNETES_VERSION="1.33"
+export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export APP_NAMESPACE="go-3tier-app"
+
+```
+
 ## Create a Kubernetes Cluster using EKS Auto or Standard Mode.
 
 #### Create Kubernetes Cluster with EKSCTL - Standard Mode
@@ -53,16 +66,6 @@ Before proceeding, answer these questions:
 - It gives you room for more flexibility, which also increase the time you need to put in to manage and upgrade your infrastructure.
 
 - Addons: CoreDNS, EBS CSI Driver and eks-pod-identity-agent
-
-```bash
-# Set essential environmental variables
-export CLUSTER_NAME=basic-cluster
-export AWS_REGION=us-east-1
-export KUBERNETES_VERSION="1.33"
-export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-export APP_NAMESPACE="go-3tier-app"
-
-```
 
 #### [EKSCTL Cluster Config File Schema](https://schema.eksctl.io/)
 
@@ -85,7 +88,6 @@ iam:
   withOIDC: false
 addonsConfig:
   disableDefaultAddons: true # If true, disables the default EKS addons.
-  #autoApplyPodIdentityAssociations: true # Automatically applies pod identity associations for addons.
 
 # EKS Pod Identity agent addon, CoreDNS, EBS CSI Driver
 addons:
@@ -196,6 +198,7 @@ EOF
 > [!IMPORTANT]
 >
 > [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
+>
 > ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
 > Examples of using helm as an alternative to install ACK Controllers will be indicated below.
 
