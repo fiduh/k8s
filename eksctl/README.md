@@ -193,7 +193,9 @@ EOF
 
 #### EKS Capabilities (Managed)
 
-> [!IMPORTANT] > [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
+> [!IMPORTANT]
+>
+> [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
 > ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
 > Examples of using helm as an alternative to install ACK Controllers will be indicated below.
 
@@ -541,7 +543,9 @@ Key improvements over IRSA:
 
 ## Install ACK EC2 Controller
 
-> [!IMPORTANT] > [Only when not using EKS Managed Capabilities]
+> [!IMPORTANT]
+>
+> [Only when not using EKS Managed Capabilities]
 
 #### https://aws-controllers-k8s.github.io/community/docs/tutorials/ec2-example/
 
@@ -675,7 +679,9 @@ kubectl describe vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE sts-endpoin
 
 ## Deploy the AWS Load Balancer Controller using Helm.
 
-> [!IMPORTANT] > [Only when not using EKS Managed Capabilities]
+> [!IMPORTANT]
+>
+> [Only when not using EKS Managed Capabilities]
 
 #### Cilium Gateway API / AWS Ingress Controller will need it to create NLBs/ALBs
 
@@ -958,7 +964,9 @@ kubectl get ingress -n $APP_NAMESPACE
 
 #### Deploy ACK Controller for API Gateway
 
-> [!IMPORTANT] > [Only when not using EKS Managed Capabilities]
+> [!IMPORTANT]
+>
+> [Only when not using EKS Managed Capabilities]
 
 [Installing AWS Service Controllers](https://aws-controllers-k8s.github.io/community/docs/user-docs/install/)
 **_Helm charts for ACK service controllers can be found in the_** [ACK registry within the Amazon ECR Public Gallery](https://gallery.ecr.aws/aws-controllers-k8s) To find a Helm chart for a specific service, you can go to gallery.ecr.aws/aws-controllers-k8s/$SERVICENAME-chart. For example, the link to the ACK service controller Helm chart for Amazon Simple Storage Service (Amazon S3) is gallery.ecr.aws/aws-controllers-k8s/s3-chart.
