@@ -111,9 +111,9 @@ EOF
 
 ```bash
 #EKS Auto Mode
+# ClusterConfig that creates a cluster with Auto Mode enabled.
 
 eksctl create cluster -f - <<EOF
-# ClusterConfig that creates a cluster with Auto Mode enabled.
 apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
@@ -208,19 +208,17 @@ eksctl create capability \
   --role-arn arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/ACKCapabilityRole
 
 # Verify Capability is Active
-eksctl get capability --cluster ${CLUSTER_NAME} --region ${AWS_
-REGION} --name ack -o yaml
+eksctl get capability --cluster ${CLUSTER_NAME} --region ${AWS_REGION} --name ack -o yaml
 
 # Get the Capability Role Name
 export capabilityRoleArn=$(eksctl get capability --cluster ${CLUSTER_NAME} --region ${AWS_REGION} --name ack -o yaml | grep roleArn | sed 's/.*roleArn: //')
+export CAPABILITY_ROLE_NAME="${capabilityRoleArn##*/}"
 
-echo $capabilityRoleArn
+echo "CAPABILITY ROLE ARN: $capabilityRoleArn"
 
-CAPABILITY_ROLE_NAME="${capabilityRoleArn##*/}"
+echo "CAPABILITY ROLE NAME: $CAPABILITY_ROLE_NAME"
 
-echo $CAPABILITY_ROLE_NAME
-
-# Attach the AdministratorAccess managed policy to the role:
+# Attach the AdministratorAccess managed policy to the role (Use more granular policies in production):
 aws iam attach-role-policy --role-name $CAPABILITY_ROLE_NAME --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
 
 # Verify CRDs are available
@@ -596,6 +594,13 @@ kubectl describe securitygroup -n $APP_NAMESPACE
 kubectl get securitygroup -n $APP_NAMESPACE -oyaml
 ```
 
+## Each VPC endpoint is tied to a specific AWS service, so traffic stays private
+
+> [!IMPORTANT]
+> Cost Considerations: ~$7.20/month per endpoint per AZ
+> Plust $0.01/GB data processed
+> So if you have 2 subnets (2 AZs) with 2 endpoints: 2 endpoints x 2 AZs x $7.20 = ~$28.80/month
+
 ## Create VPC endpoints so the controller (e.g CSI-EBS controller) can reach AWS APIs:
 
 ```bash
@@ -672,7 +677,7 @@ kubectl describe vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE sts-endpoin
 
 > [!IMPORTANT] > [Only when not using EKS Managed Capabilities]
 
-#### Cilium Gateway API will need it to create NLB/ALBs
+#### Cilium Gateway API / AWS Ingress Controller will need it to create NLBs/ALBs
 
 [Install ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
 
@@ -691,7 +696,7 @@ helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
 kubectl get deployment -n kube-system aws-load-balancer-controller
 ```
 
-## The AWS Load Balancer Controller needs to privately reach the AWS ELB API endpoint. You need a VPC endpoint for Elastic Load Balancing.
+## The AWS Load Balancer Controller needs to privately reach the AWS ELB API endpoint. You need a VPC endpoint for Elastic Load Balancers.
 
 ```bash
 
@@ -728,7 +733,7 @@ aws ec2 describe-vpc-endpoints \
 
 ## Run workloads on the cluster you created.
 
-# Create a Storage Class to persist data on Mongo Database
+# Create a Storage Class to persist MongoDB data
 
 ```bash
 # Get CSIDriver name, this should match the storageclass provisioner for ebs
@@ -790,10 +795,8 @@ kubectl get pvc -n $APP_NAMESPACE
 #### Deploy app Helm (Deployment, Service, ConfigMap)
 
 ```bash
-# Add helm repo
-helm repo add go-app-chart https://fiduh.github.io/k8s/eksctl/charts
-
-helm repo update go-app-chart
+# Add helm repo for the app
+helm repo add go-app-chart https://fiduh.github.io/k8s/eksctl/charts && helm repo update go-app-chart
 
 helm search repo go-app-chart
 
@@ -807,7 +810,7 @@ kubectl get pods,svc -n $APP_NAMESPACE
 
 ## Service Networking
 
-#### Gateway API (Cilium implementation) (North/South Traffic) - accepting traffic into the cluster. This creates an internal NLB (Network Load Balancer) that accepts external traffic from AWS API Gateway
+#### Gateway API (Cilium implementation) (North/South Traffic) - Routes traffic into the cluster from AWS API Gateway. This creates a LoadBalancer Service that provisions an internal NLB to accept traffic from API Gateway via VPC link.
 
 > [!IMPORTANT]
 > Only when using standard mode
@@ -951,7 +954,7 @@ EOF
 kubectl get ingress -n $APP_NAMESPACE
 ```
 
-## Create API Gateway resources - handling East/West Traffic
+## Create AWS API Gateway resources
 
 #### Deploy ACK Controller for API Gateway
 
@@ -979,7 +982,7 @@ kubectl get pods -n kube-system -l app.kubernetes.io/instance=ack-apigateway
 v2-controller
 ```
 
-#### VPC Endpoint for API Gateway Execute API
+#### VPC Endpoint for API Gateway Execute API (data plane) - (invoke/execute operations).
 
 ```bash
 
@@ -1011,7 +1014,7 @@ EOF
 kubectl get vpcendpoint -n $APP_NAMESPACE
 ```
 
-#### Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway)
+#### Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway) - (API Gateway control/management plane service).
 
 > [!NOTE:]
 > API Gateway service is only available in specific AZs (us-east-1b, us-east-1c, us-east-1d) in US-EAST-1 Region
