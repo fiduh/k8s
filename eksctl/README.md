@@ -1024,7 +1024,7 @@ kubectl get vpcendpoint -n $APP_NAMESPACE
 
 #### Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway) - (API Gateway control/management plane service).
 
-> [!NOTE:]
+> [!NOTE]
 > API Gateway service is only available in specific AZs (us-east-1b, us-east-1c, us-east-1d) in US-EAST-1 Region
 
 #### We need to find a compatible subnet in one of these zones
