@@ -1,20 +1,22 @@
 # A practical guide to integrating Amazon EKS with other AWS services(HTTP API Gateway, NLB, etc) in a production like setting.
 
+#### This guide shows how Services running on Amazon EKS cluster are securely exposed to external traffic, All external client requests to the AWS API gateway are securely pass through to the internal NLB/ALB via VPC private link to keep the traffic private to the VPC, Gateway API/Ingress Controller receives the traffic at the cluster level and handles routing to the various services running on Amazon EKS. And you can provision and manage the various AWS services using AWS Controller for Kubernetes(ACK).
+
 > [!NOTE]
 > This guide assumes you have basic knowledge of Kubernetes, AWS
 
 ## Summary:
 
-- _Create an EKS Cluster using Auto mode or Standard Mode_
+- We will create an EKS Cluster using Auto mode or Standard Mode
 - Key considerations while using either of the two Modes
 - Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
 
 > [!NOTE]
 > These addons are deployed automatically as system processes when using Auto Mode.
 
-- Install the require ACK (AWS Controllers for kubernetes) using EKS Capabilities or HELM, this enables AWS Services like HTTP API Gateway to be provisioned using kubernetes native configurations (CRDs), that's if you want to aviod context switching to other IaC tools like OpenTofu/Terraform
+- Install the require ACK (AWS Controllers for kubernetes) using EKS Capabilities or HELM, this enables AWS Services like HTTP API Gateway to be provisioned using kubernetes native configurations (CRDs), that's if you want to avoid context switching to other IaC tools like OpenTofu/Terraform
 - Deploy a sample fullstack app with a UI, Worker and Database in a segregated namespace to test the cluster.
-- Securely expose microservices running in the cluster to external traffic using AWS HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API, Route(or Ingress.)
+- Securely expose microservices running in the cluster to external traffic using AWS HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API/Ingress Controller.
 - Implement end-to-end encryption (Application layer (Layer 7) and IP layer (Layer 3 ) encryption).
 
 ![Integration](../images/AWS_EKS.png)
@@ -52,7 +54,6 @@ Before proceeding, answer these questions:
 export CLUSTER_NAME=basic-cluster
 export AWS_REGION=us-east-1
 export KUBERNETES_VERSION="1.33"
-export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export APP_NAMESPACE="go-3tier-app"
 
 ```
@@ -544,7 +545,7 @@ Key improvements over IRSA:
 - API Gateway
 - ALB
 
-## Install ACK EC2 Controller
+## Deploy ACK Controller for EC2 using Helm.
 
 > [!IMPORTANT]
 >
@@ -680,7 +681,7 @@ kubectl get vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE
 kubectl describe vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE sts-endpoint
 ```
 
-## Deploy the AWS Load Balancer Controller using Helm.
+## Deploy the ACK Controller for AWS Load Balancer using Helm.
 
 > [!IMPORTANT]
 >
@@ -815,11 +816,11 @@ helm install goapp go-app-chart/go-app-chart -n $APP_NAMESPACE
 kubectl get pods,svc -n $APP_NAMESPACE
 ```
 
-## Directing external user traffic to the application running in the cluster.
+## Directing external user (Client) traffic to the application running in the cluster.
 
 ## Service Networking
 
-#### Gateway API (Cilium implementation) (North/South Traffic) - Routes traffic into the cluster from AWS API Gateway. This creates a LoadBalancer Service that provisions an internal NLB to accept traffic from API Gateway via VPC link.
+#### Gateway API (Cilium implementation) (North/South Traffic) Egress/Ingress - Routes traffic into the cluster from AWS API Gateway. This creates a LoadBalancer Service that provisions an internal NLB to accept traffic from API Gateway via VPC link.
 
 > [!IMPORTANT]
 > Only when using standard mode
@@ -924,7 +925,7 @@ spec:
   scheme: internal
 EOF
 
-# Ingress
+# Ingress Routing Rules (Resource)
 
 kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
@@ -1281,7 +1282,7 @@ spec:
   description: "auto deployed stage for ${API_NAME}"
 EOF
 
-
+# Test the API endpoint.
 kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}' -n $APP_NAMESPACE
 
 ```
