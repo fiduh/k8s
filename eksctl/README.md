@@ -1,4 +1,4 @@
-# A practical guide to integrating Amazon EKS with other AWS services(HTTP API Gateway, NLB, etc) in a production like setting.
+# A practical production-oriented guide to integrating Amazon EKS with other AWS services(HTTP API Gateway, NLB, etc).
 
 #### This guide shows how Services running on Amazon EKS cluster are securely exposed to external traffic, All external client requests to the AWS API gateway are securely pass through to the internal NLB/ALB via VPC private link to keep the traffic private to the VPC, Gateway API/Ingress Controller receives the traffic at the cluster level and handles routing to the various services running on Amazon EKS. And you can provision and manage the various AWS services using AWS Controller for Kubernetes(ACK).
 
