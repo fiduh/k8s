@@ -1,25 +1,25 @@
-# A practical production-oriented guide to integrating Amazon EKS with other AWS services(HTTP API Gateway, NLB, etc).
+# A Practical Production-Oriented Guide to Integrating Amazon EKS with AWS Services (API Gateway, NLB, etc.)
 
-#### This guide shows how Services running on Amazon EKS cluster are securely exposed to external traffic, All external client requests to the AWS API gateway are securely pass through to the internal NLB/ALB via VPC private link to keep the traffic private to the VPC, Gateway API/Ingress Controller receives the traffic at the cluster level and handles routing to the various services running on Amazon EKS. And you can provision and manage the various AWS services using AWS Controller for Kubernetes(ACK).
-
-> [!NOTE]
-> This guide assumes you have basic knowledge of Kubernetes, AWS
-
-## Summary:
-
-- We will create an EKS Cluster using Auto mode or Standard Mode
-- Key considerations while using either of the two Modes
-- Deploy the relevant addons to the cluster including CoreDNS, Cilium-CNI, Pod Identity Agent, Storage CSI, etc.
+#### This guide shows how services running on an Amazon EKS cluster are securely exposed to external traffic. External client requests to AWS API Gateway are securely passed through to an internal NLB/ALB via VPC PrivateLink, keeping traffic private to the VPC. At the cluster level, a Gateway API/Ingress Controller receives the traffic and handles routing to various services running on Amazon EKS. You can provision and manage these AWS services using AWS Controllers for Kubernetes (ACK).
 
 > [!NOTE]
-> These addons are deployed automatically as system processes when using Auto Mode.
+> This guide assumes you have basic knowledge of Kubernetes and AWS.
 
-- Install the require ACK (AWS Controllers for kubernetes) using EKS Capabilities or HELM, this enables AWS Services like HTTP API Gateway to be provisioned using kubernetes native configurations (CRDs), that's if you want to avoid context switching to other IaC tools like OpenTofu/Terraform
-- Deploy a sample fullstack app with a UI, Worker and Database in a segregated namespace to test the cluster.
-- Securely expose microservices running in the cluster to external traffic using AWS HTTP API Gateway, VPC Private Link, NLB/ALB, Gateway API/Ingress Controller.
-- Implement end-to-end encryption (Application layer (Layer 7) and IP layer (Layer 3 ) encryption).
+## Summary
 
-![Integration](../images/AWS_EKS.png)
+- Create an EKS cluster using Auto mode or Standard mode
+- Review key considerations for choosing between the two modes
+- Deploy relevant add-ons to the cluster, including CoreDNS, Cilium CNI, Pod Identity Agent, and Storage CSI
+
+> [!NOTE]
+> These add-ons are deployed automatically as system processes when using Auto mode.
+
+- Install the required ACK (AWS Controllers for Kubernetes) using EKS Capabilities or Helm. This enables AWS services like HTTP API Gateway to be provisioned using Kubernetes-native configurations (CRDs), avoiding the need to context-switch to other IaC tools like OpenTofu or Terraform
+- Deploy a sample full-stack app with a UI, worker, and database in a segregated namespace to test the cluster
+- Securely expose microservices running in the cluster to external traffic using AWS HTTP API Gateway, VPC PrivateLink, NLB/ALB, and Gateway API/Ingress Controller
+- Implement end-to-end encryption at both the application layer (Layer 7) and IP layer (Layer 3)
+
+![Integration](../images/Reference_Arch.png)
 
 ## Prerequisites Checklist
 
@@ -47,6 +47,44 @@ Before proceeding, answer these questions:
 1. **CNI Choice**: Using Cilium (Standard) or AWS VPC CNI (Auto)?
 2. **Ingress Strategy**: Gateway API or AWS Ingress Controller?
 3. **ACK Installation**: Managed Capabilities or Helm?
+
+## What are AWS Controllers for Kubernetes (ACK)?
+
+![Integration](../images/ACK_IMG.png)
+
+ACK enables you to manage AWS service dependencies (like S3, RDS, Lambda) directly from Kubernetes using the Kubernetes resource model and control loop. Instead of provisioning AWS resources separately through the console, CLI, or IaC tools, you can define them as Kubernetes custom resources.
+
+**How ACK Works**
+
+ACK leverages the standard Kubernetes control loop:
+
+1. **Observe** - Kubernetes reads your resource configuration
+2. **Diff** - Compares desired state with actual state
+3. **Act** - Reconciles any differences
+
+While this control loop traditionally manages in-cluster resources (Deployments, Pods, Services), Kubernetes' modular architecture allows ACK to extend this pattern to manage AWS resources outside the cluster.
+
+**Architecture & Workflow**
+
+- ACK releases a separate controller for each AWS service (S3, Lambda, RDS, etc.) - there's no single unified release
+- Ops teams deploy controllers for services developers need
+- Controllers authenticate with AWS using Pod Identity (or IRSA)
+- Developers define custom resources and apply them with `kubectl apply`
+- RBAC controls which developers can create specific AWS resources
+
+**Why Use ACK?**
+
+ACK provides a unified workflow for managing both application resources (running in Kubernetes) and infrastructure dependencies (AWS services). Instead of context-switching between Kubernetes manifests and separate IaC tools like Terraform or CloudFormation, developers use a single Kubernetes-native approach for their entire stack. This reduces operational complexity and cognitive overhead, especially for teams already familiar with Kubernetes.
+
+## What's EKS Pod Identity?
+
+EKS Pod Identity enables you to securely connect workloads running in an EKS cluster to AWS services like S3 by linking IAM roles to pods. While similar to IRSA (IAM Roles for Service Accounts), Pod Identity streamlines the operational overhead and is backwards compatible with IRSA.
+
+Key improvements over IRSA:
+
+- No need to create an OIDC provider for each cluster - roles can be reused across multiple clusters without updating trust policies.
+- Simplified trust policies using the `pods.eks.amazonaws.com` service principal instead of cluster-specific OIDC endpoints.
+- Built-in attribute-based access control (ABAC) through automatic session tags (cluster name, namespace, service account) that enable fine-grained permissions with a single IAM policy.
 
 #### Set essential environmental variables
 
@@ -107,10 +145,18 @@ EOF
 
 #### [Configure EKS Auto Mode settings](https://docs.aws.amazon.com/eks/latest/userguide/settings-auto.html)
 
-- This delegates the management of both the control plane and data plane to AWS. Your nodes are scaled automatically as workload demand increases and decreases, and you get automatic upgrades of the cluster.
-- The EKS Pod Identity Agent is pre-installed automatically on Auto Mode clusters, but you still need to configure pod identity associations for your workloads.
-- Core addons (CoreDNS, VPC-CNI, and EBS CSI Driver) run as systemd processes on worker nodes rather than as Kubernetes pods. Kube-proxy is also managed automatically by Auto Mode.
-- This service costs an additional 12% on top of the standard EC2 instance pricing for the data plane (as of 2025). AWS Auto Mode charges are independent of EC2 instance discounts from Spot, Reserved Instances, or Savings Plans - you still benefit from those discounts on the EC2 costs, but the 12% management fee is calculated separately on the base EC2 price.
+- Auto mode delegates management of both the control plane and data plane to AWS. Nodes scale automatically based on workload demand, and you get automatic cluster upgrades.
+- The EKS Pod Identity Agent is pre-installed automatically on Auto mode clusters, but you still need to configure pod identity associations for your workloads.
+- Core add-ons (CoreDNS, VPC CNI, and EBS CSI Driver) run as systemd processes on worker nodes rather than as Kubernetes pods. Kube-proxy is also managed automatically by Auto mode.
+- Auto mode adds a **12% management fee** calculated on the **on-demand EC2 instance price**:
+  - The 12% fee applies to the base EC2 price BEFORE any discounts
+  - You still receive your EC2 discounts (Spot: ~70% off, Reserved/Savings Plans: up to 72% off)
+  - Example calculation for m5.large:
+    - On-demand price: $0.096/hour
+    - Auto mode fee: $0.0115/hour (12% of $0.096)
+    - With 70% Spot discount: $0.0288 + $0.0115 = $0.0403/hour total
+    - Net savings vs on-demand: 58% (not 70%)
+  - Verify current pricing on the AWS pricing page as rates and discount percentages may change
 
 ```bash
 #EKS Auto Mode
@@ -198,10 +244,10 @@ EOF
 
 > [!IMPORTANT]
 >
-> [Enable EKS Managed Capabilities, instead of using helm to install ACK Controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
+> [Enable EKS managed capabilities instead of using Helm to install ACK controllers](https://aws-controllers-k8s.github.io/docs/getting-started-eks)
 >
-> ACK is available as a fully managed EKS Capability. AWS handles controller installation, updates, and scaling for you - no Helm or manual installation required.
-> Examples of using helm as an alternative to install ACK Controllers will be indicated below.
+> ACK is available as a fully managed EKS capability. AWS handles controller installation, updates, and scaling—no Helm or manual installation required.
+> Examples using Helm as an alternative installation method are provided below for reference.
 
 ```bash
 
@@ -265,7 +311,14 @@ echo "VPC_CIDR: ${VPC_CIDR}"
 
 ```
 
-#### Create pod identity association to grant the various Workloads, AWS Controllers and service accounts permissions in AWS; Cilium operator service account, aws-load-balancer-controller, EBS CSI controller and ack-apigatewayv2-controller.
+#### Create pod identity associations to grant AWS permissions to workloads, controllers, and service accounts
+
+Grant the necessary AWS permissions to the following components:
+
+- Cilium operator service account
+- AWS Load Balancer Controller
+- EBS CSI controller
+- ACK API Gateway v2 controller
 
 > [!IMPORTANT]
 > Only while using standard mode.
@@ -373,13 +426,16 @@ iam:
 EOF
 ```
 
-## Install Cilium CNI on the cluster using helm and replace Kube-proxy, enable Gateway API for service communication, enable WireGuard for Pod to Pod communication encryption. (Not required while using Auto Mode)
+## Install Cilium CNI on the cluster using helm and replace Kube-proxy, enable Gateway API for service communication, enable WireGuard for Pod to Pod communication encryption. (Standard mode only)
+
+> [!NOTE]
+> This step is not required when using Auto mode. Auto mode uses VPC CNI by default and manages networking automatically.
 
 [Helm install Cilium docs](https://docs.cilium.io/en/stable/installation/k8s-install-helm/)
 
 #### You can install Cilium in either ENI mode or Overlay mode on an EKS cluster.
 
-- In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI, so the aws-node DaemonSet has to be patched to prevent conflict behavior.
+- In case of ENI mode, Cilium will manage ENIs instead of the VPC CNI.
 - Set your API_SERVER_IP and API_SERVER_PORT by using `kubectl cluster-info`
 
 #### Before we install Cilium with Gateway API, we need to make sure we install the Gateway API CRDs
@@ -498,67 +554,56 @@ status: {}
 EOF
 ```
 
-## Depoly relevant AWS Kubernetes Controllers (ACK) in the EKS Cluster and Grant them the required Permissions to AWS resources using HELM.
+## Deploy relevant AWS Controllers for Kubernetes (ACK) in the EKS cluster and grant them required permissions using Helm
 
 > [!IMPORTANT]
-> This is an alternative to using EKS Capabilities (Managed)
+> This is an alternative to using EKS capabilities (managed). EKS capabilities are the recommended approach for production environments.
 
-_What are AWS Controllers for Kubernetes (ACK)?_
-
-ACK enables you to manage AWS service dependencies (like S3, RDS, Lambda) directly from Kubernetes using the Kubernetes resource model and control loop. Instead of provisioning AWS resources separately through the console, CLI, or IaC tools, you can define them as Kubernetes custom resources.
-
-**How ACK Works**
-
-ACK leverages the standard Kubernetes control loop:
-
-1. **Observe** - Kubernetes reads your resource configuration
-2. **Diff** - Compares desired state with actual state
-3. **Act** - Reconciles any differences
-
-While this control loop traditionally manages in-cluster resources (Deployments, Pods, Services), Kubernetes' modular architecture allows ACK to extend this pattern to manage AWS resources outside the cluster.
-
-**Architecture & Workflow**
-
-- ACK releases a separate controller for each AWS service (S3, Lambda, RDS, etc.) - there's no single unified release
-- Ops teams deploy controllers for services developers need
-- Controllers authenticate with AWS using Pod Identity (or IRSA)
-- Developers define custom resources and apply them with `kubectl apply`
-- RBAC controls which developers can create specific AWS resources
-
-**Why Use ACK?**
-
-ACK provides a unified workflow for managing both application resources (running in Kubernetes) and infrastructure dependencies (AWS services). Instead of context-switching between Kubernetes manifests and separate IaC tools like Terraform or CloudFormation, developers use a single Kubernetes-native approach for their entire stack. This reduces operational complexity and cognitive overhead, especially for teams already familiar with Kubernetes.
-
-_What's EKS Pod Identity?_
-
-EKS Pod Identity enables you to securely connect workloads running in an EKS cluster to AWS services like S3 by linking IAM roles to pods. While similar to IRSA (IAM Roles for Service Accounts), Pod Identity streamlines the operational overhead and is backwards compatible with IRSA.
-
-Key improvements over IRSA:
-
-- No need to create an OIDC provider for each cluster - roles can be reused across multiple clusters without updating trust policies.
-- Simplified trust policies using the `pods.eks.amazonaws.com` service principal instead of cluster-specific OIDC endpoints.
-- Built-in attribute-based access control (ABAC) through automatic session tags (cluster name, namespace, service account) that enable fine-grained permissions with a single IAM policy.
-
-# List of Controllers to be installed
+# List of ACK Controllers to be installed
 
 - EC2
 - API Gateway
 - ALB
 
-## Deploy ACK Controller for EC2 using Helm.
+## Deploy ACK Controller for EC2 using Helm
 
 > [!IMPORTANT]
->
-> [Only when not using EKS Managed Capabilities]
+> Only required when not using EKS managed capabilities.
 
-#### https://aws-controllers-k8s.github.io/community/docs/tutorials/ec2-example/
+The ACK Controller for EC2 is needed to provision VPC interface endpoints for:
+
+- **EC2 endpoint**: Required by EBS CSI driver to privately reach the AWS EC2 service endpoint (`https://ec2.${AWS_REGION}.amazonaws.com`). NAT Gateway is an alternative.
+- **STS endpoint**: Required by EBS CSI driver, which uses Pod Identity for authentication
+- **Other AWS service endpoints**: The EC2 controller can provision VPC endpoints for any AWS service
+
+### How VPC Interface Endpoints Work
+
+- VPC endpoints create ENIs (Elastic Network Interfaces) in your subnets
+- Traffic flows through those ENIs to reach the AWS service
+- The security group must allow inbound traffic on port 443 from your VPC CIDR to those ENIs
+- Without the security group rule, pods cannot reach the VPC endpoint
+
+### Cost Considerations for Interface Endpoints
+
+**Per endpoint pricing:**
+
+- ~$7.20/month per endpoint per AZ
+- Plus $0.01/GB data processed
+
+**Example: 2 endpoints across 2 AZs (2 subnets):**
+
+- 2 endpoints × 2 AZs × $7.20 = ~$28.80/month (plus data transfer costs)
+
+### Reference
+
+https://aws-controllers-k8s.github.io/community/docs/tutorials/ec2-example/
 
 ```bash
 export EC2_SERVICE=ec2
 export RELEASE_VERSION=$(curl -sL https://api.github.com/repos/aws-controllers-k8s/${EC2_SERVICE}-controller/releases/latest | jq -r '.tag_name | ltrimstr("v")')
 export ACK_SYSTEM_NAMESPACE=kube-system
 
-aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
+aws ecr-public get-login-password --region $AWS_REGION | helm registry login --username AWS --password-stdin public.ecr.aws
 
 helm install  -n $ACK_SYSTEM_NAMESPACE --create-namespace ack-$EC2_SERVICE-controller \
 --set serviceAccount.create=true --set serviceAccount.name=ack-$EC2_SERVICE-controller \
@@ -603,11 +648,6 @@ kubectl get securitygroup -n $APP_NAMESPACE -oyaml
 ```
 
 ## Each VPC endpoint is tied to a specific AWS service, so traffic stays private
-
-> [!IMPORTANT]
-> Cost Considerations: ~$7.20/month per endpoint per AZ
-> Plust $0.01/GB data processed
-> So if you have 2 subnets (2 AZs) with 2 endpoints: 2 endpoints x 2 AZs x $7.20 = ~$28.80/month
 
 ## Create VPC endpoints so the controller (e.g CSI-EBS controller) can reach AWS APIs:
 
@@ -706,7 +746,7 @@ helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
 kubectl get deployment -n kube-system aws-load-balancer-controller
 ```
 
-## The AWS Load Balancer Controller needs to privately reach the AWS ELB API endpoint. You need a VPC endpoint for Elastic Load Balancers.
+## The AWS Load Balancer Controller needs to privately reach the AWS ELB Service endpoint. You need a VPC endpoint for Elastic Load Balancers.
 
 ```bash
 
@@ -820,14 +860,22 @@ kubectl get pods,svc -n $APP_NAMESPACE
 
 ## Service Networking
 
-#### Gateway API (Cilium implementation) (North/South Traffic) Egress/Ingress - Routes traffic into the cluster from AWS API Gateway. This creates a LoadBalancer Service that provisions an internal NLB to accept traffic from API Gateway via VPC link.
+#### Gateway API (Cilium implementation) (North/South Traffic) - Routes traffic into the cluster. It creates a LoadBalancer Service that provisions an internal NLB to accept traffic from API Gateway via VPC link.
 
 > [!IMPORTANT]
-> Only when using standard mode
+> Only applicable when using Standard mode with Cilium CNI.
 
-- GatewayClass, deployed when cilium is been installed (gatewayAPI.enabled=true)
-- Gateway
-- HTTPRoute --> Service
+**Gateway API Components:**
+
+- **GatewayClass**: Deployed automatically when Cilium is installed with `gatewayAPI.enabled=true`
+- **Gateway**: Defines the load balancer configuration
+- **HTTPRoute**: Routes traffic from the Gateway to backend services
+
+**Traffic Flow:**
+
+```
+External Client → AWS API Gateway → VPC Link → Internal NLB → Gateway → HTTPRoute → Service → Pods
+```
 
 ```bash
 
@@ -887,7 +935,7 @@ kubectl get svc -n $APP_NAMESPACE
 
 #### [Create an AWS IngressClass to configure an Application Load Balancer](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html)
 
-#### Recommended when using auto mode, because the AWS VPC CNI is baked in as a systemd process.
+#### Recommended when using auto mode, because the AWS VPC CNI is baked in as a system process.
 
 > [!IMPORTANT]
 > Only when using Auto mode
@@ -994,7 +1042,14 @@ kubectl get pods -n kube-system -l app.kubernetes.io/instance=ack-apigateway
 v2-controller
 ```
 
-#### VPC Endpoint for API Gateway Execute API (data plane) - (invoke/execute operations).
+## There are Two Different API Gateway Services:
+
+| Service Name                          | Purpose                     | Used By                  |
+| ------------------------------------- | --------------------------- | ------------------------ |
+| `com.amazonaws.us-east-1.execute-api` | Invoke APIs (data plane)    | Your application clients |
+| `com.amazonaws.us-east-1.apigateway`  | Manage APIs (control plane) | ACK controller           |
+
+#### VPC endpoint for execute-api (API Gateway data plane for invoking APIs), and the ACK controller needs to connect to the apigateway service (API Gateway control plane for managing APIs).
 
 ```bash
 
@@ -1026,10 +1081,10 @@ EOF
 kubectl get vpcendpoint -n $APP_NAMESPACE
 ```
 
-#### Create VPC Endpoint for API Gateway Management API (com.amazonaws.${AWS_REGION}.apigateway) - (API Gateway control/management plane service).
+#### Create VPC Endpoint for API Gateway Management Service (com.amazonaws.${AWS_REGION}.apigateway) - Your controller creates/manages API Gateway resources, so it needs the apigateway endpoint, not execute-api.
 
 > [!NOTE]
-> API Gateway service is only available in specific AZs (us-east-1b, us-east-1c, us-east-1d) in US-EAST-1 Region
+> API Gateway service is only available in specific AZs in some Regions, e.g. (us-east-1b, us-east-1c, us-east-1d) in US-EAST-1 Region
 
 #### We need to find a compatible subnet in one of these zones
 
@@ -1091,6 +1146,26 @@ aws ec2 describe-vpc-endpoints \
 ```
 
 #### Create security group for the VPC link:
+
+- In production VPC Link Security group should only allow inbound / outbound traffic on port 443, this ensures encryption of traffic form the VPC Link to the Internal Load balancer, then to the pods.
+
+> [!WARNING] > **Security Issues with Unencrypted Internal Traffic (Port 80):**
+>
+> - Data is transmitted in plaintext within your VPC
+> - Fails to meet compliance standards (PCI-DSS, HIPAA require encryption in transit)
+> - Vulnerable to insider threats—anyone with VPC access can intercept traffic
+
+### Recommended Approach: TLS Passthrough (End-to-End Encryption)
+
+**TLS passthrough provides true end-to-end encryption** by keeping traffic encrypted from the client all the way to your pods:
+
+- Configure the NLB to forward encrypted traffic on port 443 without terminating TLS
+- VPC Link security group allows port 443 traffic
+- Pods handle TLS termination with their own certificates
+- Use **cert-manager** or **Cilium Gateway** for automatic certificate management
+
+**Pros:** True end-to-end encryption  
+**Cons:** More complex certificate management at the pod level
 
 #### https://aws-controllers-k8s.github.io/community/reference/ec2/v1alpha1/securitygroup/
 
@@ -1286,3 +1361,18 @@ EOF
 kubectl get apis.apigatewayv2.services.k8s.aws ack-api -o jsonpath='{.status.apiEndpoint}' -n $APP_NAMESPACE
 
 ```
+
+## Conclusion
+
+In this guide, we've explored how to securely expose services running on Amazon EKS to external traffic using a production-ready architecture. By integrating AWS API Gateway, VPC PrivateLink, and load balancers with Kubernetes-native tools like Gateway API or Ingress Controllers, you can build a robust ingress pattern that keeps traffic private within your VPC.
+
+Key takeaways:
+
+- **Choose the right mode**: Auto mode simplifies operations with automatic scaling and upgrades, while Standard mode offers more control and flexibility with tools like Cilium CNI
+- **Implement end-to-end encryption**: Use TLS passthrough to maintain encrypted traffic from client to pod, meeting security and compliance requirements
+- **Leverage ACK for infrastructure as code**: Provision AWS resources using Kubernetes-native configurations, reducing context switching between tools
+- **Consider costs**: VPC endpoints and Auto mode management fees add up—understand the tradeoffs before deploying to production
+
+This architecture provides a solid foundation for production workloads, balancing security, operational efficiency, and cost. As you implement this in your environment, remember to verify current AWS pricing and review the official documentation for any updates to these services.
+
+For questions or feedback, feel free to reach out or leave a comment below. Happy building!
