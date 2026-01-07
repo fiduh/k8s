@@ -137,6 +137,8 @@ addons:
   - name: aws-ebs-csi-driver # Installs the AWS EBS CSI Driver addon for dynamic EBS volume provisioning.
     version: latest
 EOF
+
+kubectl cluster-info
 ```
 
 ## OR
@@ -238,6 +240,8 @@ iam:
           - "iam:CreateServiceLinkedRole"
           Resource: "*"
 EOF
+
+kubectl cluster-info
 ```
 
 #### EKS Capabilities (Managed)
@@ -300,7 +304,7 @@ echo "Private subnets (one per AZ): ${SUBNET_JSON}"
 export CLUSTER_SG=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} \
   --query 'cluster.resourcesVpcConfig.clusterSecurityGroupId' --output text)
 
-echo ${CLUSTER_SG}
+echo "Cluster Security Group ID: ${CLUSTER_SG}"
 
 # Get VPC ID and VPC CIDR (CRITICAL: Must be done before Cilium install)
 export VPC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} --query "cluster.resourcesVpcConfig.vpcId" --output text)
@@ -478,6 +482,7 @@ helm install cilium cilium/cilium --version 1.18.4 \
   --set gatewayAPI.enabled=true\
   --set operator.replicas=1
 
+cilium status
 # IMPORTANT: enableIPv4Masquerade=true + ipv4NativeRoutingCIDR hybrid approach:
 # - enableIPv4Masquerade=true: Required for internet/AWS public endpoint access via NAT Gateway
 #   Without this, pods cannot reach internet because NAT Gateway won't translate pod IPs
@@ -532,6 +537,8 @@ managedNodeGroups:
       effect: "NoExecute"
 EOF
 
+kubectl get nodes
+cilium status
 
 # SECURITY NOTE: privateNetworking: true ensures:
 # - Nodes get NO public IPs
@@ -552,6 +559,8 @@ metadata:
 spec: {}
 status: {}
 EOF
+
+kubectl get namespaces
 ```
 
 ## Deploy relevant AWS Controllers for Kubernetes (ACK) in the EKS cluster and grant them required permissions using Helm
@@ -610,7 +619,7 @@ helm install  -n $ACK_SYSTEM_NAMESPACE --create-namespace ack-$EC2_SERVICE-contr
   oci://public.ecr.aws/aws-controllers-k8s/$EC2_SERVICE-chart --version=$RELEASE_VERSION --set=aws.region=$AWS_REGION
 
 #Check the CRDs have been installed using:
-kubectl get crds
+kubectl get crds | grep -i ec2
 ```
 
 ## **_Create Security group for endpoints_**
@@ -642,14 +651,19 @@ spec:
           description: "Allow HTTPS outbound"
 EOF
 
+kubectl wait \
+  --for=condition=Ready \
+  securitygroup/endpoints-sg \
+  -n "$APP_NAMESPACE" \
+  --timeout=2m
+
 kubectl describe securitygroup -n $APP_NAMESPACE
 
-kubectl get securitygroup -n $APP_NAMESPACE -oyaml
 ```
 
 ## Each VPC endpoint is tied to a specific AWS service, so traffic stays private
 
-## Create VPC endpoints so the controller (e.g CSI-EBS controller) can reach AWS APIs:
+## Create VPC endpoints so the controller (e.g, CSI-EBS controller) can reach AWS Service endpoints:
 
 ```bash
 
@@ -677,6 +691,12 @@ spec:
     - key: Purpose
       value: EBS-CSI-Driver
 EOF
+
+kubectl wait \
+  --for=condition=Ready \
+  vpcendpoint/ec2-api-endpoint \
+  -n "$APP_NAMESPACE" \
+  --timeout=4m
 
 # Check the resource status
 kubectl describe vpcendpoint ec2-api-endpoint -n $APP_NAMESPACE
@@ -716,6 +736,12 @@ spec:
       value: Pod-Identity
 EOF
 
+kubectl wait \
+  --for=condition=Ready \
+  vpcendpoints.ec2.services.k8s.aws/sts-endpoint \
+  -n "$APP_NAMESPACE" \
+  --timeout=4m
+
 kubectl get vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE
 
 kubectl describe vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE sts-endpoint
@@ -729,7 +755,7 @@ kubectl describe vpcendpoints.ec2.services.k8s.aws -n $APP_NAMESPACE sts-endpoin
 
 #### Cilium Gateway API / AWS Ingress Controller will need it to create NLBs/ALBs
 
-[Install ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
+[Deploy ALB Controller with Helm](https://docs.aws.amazon.com/eks/latest/userguide/lbc-helm.html)
 
 ```bash
 
@@ -771,6 +797,12 @@ spec:
       value: elasticloadbalancing-vpc-endpoint
 EOF
 
+kubectl wait \
+  --for=condition=Ready \
+  vpcendpoint/elasticloadbalancing-endpoint \
+  -n "$APP_NAMESPACE" \
+  --timeout=4m
+
 # Check the resource status
 kubectl describe vpcendpoint ec2-api-endpoint -n $APP_NAMESPACE
 
@@ -783,7 +815,7 @@ aws ec2 describe-vpc-endpoints \
 
 ## Run workloads on the cluster you created.
 
-# Create a Storage Class to persist MongoDB data
+#### Create a Storage Class to persist MongoDB data
 
 ```bash
 # Get CSIDriver name, this should match the storageclass provisioner for ebs
@@ -842,7 +874,7 @@ EOF
 kubectl get pvc -n $APP_NAMESPACE
 ```
 
-#### Deploy app Helm (Deployment, Service, ConfigMap)
+#### Deploy app using Helm (Deployment, Service, ConfigMap)
 
 ```bash
 # Add helm repo for the app
@@ -857,8 +889,6 @@ kubectl get pods,svc -n $APP_NAMESPACE
 ```
 
 ## Directing external user (Client) traffic to the application running in the cluster.
-
-## Service Networking
 
 #### Gateway API (Cilium implementation) (North/South Traffic) - Routes traffic into the cluster. It creates a LoadBalancer Service that provisions an internal NLB to accept traffic from API Gateway via VPC link.
 
@@ -884,7 +914,7 @@ kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: my-gateway
+  name: cluster-gateway
   namespace: ${APP_NAMESPACE}
 spec:
   gatewayClassName: cilium
@@ -898,6 +928,7 @@ spec:
 EOF
 
 
+
 # HTTProute config
 kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1beta1
@@ -907,7 +938,7 @@ metadata:
   namespace: ${APP_NAMESPACE}
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: cluster-gateway
   rules:
     - matches:
         - path:
@@ -928,7 +959,10 @@ EOF
 kubectl get httproute -n $APP_NAMESPACE
 kubectl get gateway -n $APP_NAMESPACE
 
-kubectl get svc -n $APP_NAMESPACE
+kubectl describe httproute -n $APP_NAMESPACE combined-route
+kubectl describe gateway -n $APP_NAMESPACE cluster-gateway
+kubectl get svc -n go-3tier-app -l "gateway.networking.k8s.io/gateway-name=cluster-gateway"
+
 ```
 
 ## OR
@@ -1021,7 +1055,8 @@ kubectl get ingress -n $APP_NAMESPACE
 > [Only when not using EKS Managed Capabilities]
 
 [Installing AWS Service Controllers](https://aws-controllers-k8s.github.io/community/docs/user-docs/install/)
-**_Helm charts for ACK service controllers can be found in the_** [ACK registry within the Amazon ECR Public Gallery](https://gallery.ecr.aws/aws-controllers-k8s) To find a Helm chart for a specific service, you can go to gallery.ecr.aws/aws-controllers-k8s/$SERVICENAME-chart. For example, the link to the ACK service controller Helm chart for Amazon Simple Storage Service (Amazon S3) is gallery.ecr.aws/aws-controllers-k8s/s3-chart.
+
+**_Helm charts for ACK service controllers can be found in the_** [ACK registry within the Amazon ECR Public Gallery](https://gallery.ecr.aws/aws-controllers-k8s). To find a Helm chart for a specific service, you can go to gallery.ecr.aws/aws-controllers-k8s/$SERVICENAME-chart. For example, the link to the ACK service controller Helm chart for Amazon Simple Storage Service (Amazon S3) is gallery.ecr.aws/aws-controllers-k8s/s3-chart.
 
 _You can use the Helm CLI to log into the ECR public Helm registry and install the chart._
 
@@ -1038,8 +1073,7 @@ helm install --create-namespace -n $ACK_SYSTEM_NAMESPACE ack-$API_GATEWAY_SERVIC
 $CHART_REPO/$API_GATEWAY_SERVICE-chart --version $RELEASE_VERSION --set=aws.region=$AWS_REGION \
 --set serviceAccount.name=ack-apigatewayv2-controller --set=serviceAccount.create=false
 
-kubectl get pods -n kube-system -l app.kubernetes.io/instance=ack-apigateway
-v2-controller
+kubectl get pods -n kube-system -l app.kubernetes.io/instance=ack-apigatewayv2-controller
 ```
 
 ## There are Two Different API Gateway Services:
@@ -1078,7 +1112,14 @@ spec:
       value: ACK
 EOF
 
+kubectl wait \
+  --for=condition=Ready \
+  vpcendpoint/apigateway-endpoint \
+  -n "$APP_NAMESPACE" \
+  --timeout=2m
+
 kubectl get vpcendpoint -n $APP_NAMESPACE
+kubectl describe vpcendpoint apigateway-endpoint -n $APP_NAMESPACE
 ```
 
 #### Create VPC Endpoint for API Gateway Management Service (com.amazonaws.${AWS_REGION}.apigateway) - Your controller creates/manages API Gateway resources, so it needs the apigateway endpoint, not execute-api.
@@ -1101,13 +1142,13 @@ APIGW_AZS=$(aws ec2 describe-vpc-endpoint-services \
 echo "API Gateway available in: ${APIGW_AZS}"
 
 # Get private subnets and filter to only those in service AZs
-COMPATIBLE_SUBNET=$(aws ec2 describe-subnets \
+COMPATIBLE_SUBNETS=$(aws ec2 describe-subnets \
   --region "${AWS_REGION}" \
   --filters "Name=vpc-id,Values=${VPC_ID}" "Name=map-public-ip-on-launch,Values=false" \
   --query 'Subnets[*]' --output json | \
-  jq -r --argjson azs "${APIGW_AZS}" '.[] | select(.AvailabilityZone as $az | $azs | index($az)) | .SubnetId')
+  jq -r --argjson azs "${APIGW_AZS}" '[.[] | select(.AvailabilityZone as $az | $azs | index($az)) | .SubnetId] | map("    - " + .) | join("\n")')
 
-echo "Compatible subnet: ${COMPATIBLE_SUBNET}"
+echo "Compatible subnet: ${COMPATIBLE_SUBNETS}"
 
 
 kubectl apply -f - <<EOF
@@ -1121,7 +1162,7 @@ spec:
   serviceName: com.amazonaws.${AWS_REGION}.apigateway
   vpcEndpointType: Interface
   subnetIDs:
-    - ${COMPATIBLE_SUBNET}
+${COMPATIBLE_SUBNETS}
   securityGroupRefs:
     - from:
         name: endpoints-sg  # Reference the Endpoint SG
@@ -1136,7 +1177,15 @@ spec:
       value: ACK-APIGateway-Controller
 EOF
 
+
+kubectl wait \
+  --for=condition=Ready \
+  vpcendpoint/apigateway-management-endpoint \
+  -n "$APP_NAMESPACE" \
+  --timeout=2m
+
 kubectl get vpcendpoint -n $APP_NAMESPACE
+kubectl describe vpcendpoint apigateway-management-endpoint -n $APP_NAMESPACE
 
 
 aws ec2 describe-vpc-endpoints \
@@ -1147,7 +1196,7 @@ aws ec2 describe-vpc-endpoints \
 
 #### Create security group for the VPC link:
 
-- In production VPC Link Security group should only allow inbound / outbound traffic on port 443, this ensures encryption of traffic form the VPC Link to the Internal Load balancer, then to the pods.
+- In production VPC Link Security group should only allow inbound / outbound traffic on port 443. this ensures encryption of traffic from the VPC Link to the Internal Load balancer, then to the pods.
 
 > [!WARNING] > **Security Issues with Unencrypted Internal Traffic (Port 80):**
 >
@@ -1204,15 +1253,22 @@ spec:
 EOF
 
 
+kubectl wait \
+  --for=condition=Ready \
+  securitygroup/sg-vpc-link \
+  -n "$APP_NAMESPACE" \
+  --timeout=50s
+
+kubectl get securitygroup -n $APP_NAMESPACE -owide
+kubectl describe securitygroup sg-vpc-link -n $APP_NAMESPACE
+
 export VPCLINK_SG=$(aws ec2 describe-security-groups \
   --filters "Name=group-name,Values=SG_VPC_LINK" "Name=vpc-id,Values=$VPC_ID" \
   --region $AWS_REGION \
   --query "SecurityGroups[0].GroupId" \
   --output text)
 
-kubectl get securitygroup -n $APP_NAMESPACE
-
-echo $VPCLINK_SG
+echo "Security Group ID for the VPC Link: $VPCLINK_SG"
 ```
 
 #### Create a VPC Link for the internal NLB/ALB:
@@ -1232,10 +1288,17 @@ spec:
   subnetIDs: ${SUBNET_JSON}
 EOF
 
+kubectl wait \
+  --for=condition=Ready \
+  vpclinks.apigatewayv2.services.k8s.aws/nlb-internal \
+  -n "$APP_NAMESPACE" \
+  --timeout=4m
 
 kubectl get vpclinks.apigatewayv2.services.k8s.aws -n $APP_NAMESPACE
 
 aws apigatewayv2 get-vpc-links --region $AWS_REGION
+
+kubectl describe vpclink nlb-internal -n $APP_NAMESPACE
 
 aws apigatewayv2 get-vpc-links \
   --region $AWS_REGION \
@@ -1243,7 +1306,7 @@ aws apigatewayv2 get-vpc-links \
   --output table
 ```
 
-#### Create an AWS HTTP API Gateway Route, VPC Link Integration and Stage: - private integration with AWS VPC **_K8S CRD_**
+#### Create an AWS HTTP API Gateway Route, VPC Link Integration, and Stage: - private integration with AWS VPC **_K8S CRD_**
 
 [Apigatewayv2-reference-example](https://github.com/aws-controllers-k8s/community/blob/main/docs/content/docs/tutorials/apigatewayv2-reference-example.md)
 
@@ -1253,10 +1316,14 @@ aws apigatewayv2 get-vpc-links \
 # Integration uri should either be for AWS ingress(recommened when using auto mode) or Cilium gateway
 
 #### Find the ALB DNS Name from Ingress (Only when using Auto Mode)
-ALB_HOSTNAME=$(kubectl get ingress minimal-ingress -n $APP_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+ALB_HOSTNAME=$(kubectl get ingress minimal-ingress -n $APP_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
 
 #### Retrieve the ALB ARN Using AWS CLI (Only when using Auto Mode)
-ALB_ARN=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" --output text)
+ALB_ARN=$(
+  aws elbv2 describe-load-balancers \
+    --query "LoadBalancers[?DNSName=='$ALB_HOSTNAME'].LoadBalancerArn" \
+    --output text 2>/dev/null || true
+)
 
 
 API_NAME="ack-api"
