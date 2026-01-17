@@ -1,5 +1,13 @@
-# Practical Repo fOR K8s in production
+# Practical Repo for Kubernetes in production
 
-- Security
-- Scalability
-- Networking
+Repo Structure
+.
+├── README.md
+├── autoscaling
+├── eksctl
+├── helm
+├── images
+├── kind
+├── kubeadm
+├── networking
+└── security
