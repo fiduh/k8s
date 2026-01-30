@@ -1,6 +1,8 @@
 # Practical Repo for Kubernetes in production
 
 Repo Structure
+
+```bash
 .
 ├── README.md
 ├── autoscaling
@@ -11,3 +13,5 @@ Repo Structure
 ├── kubeadm
 ├── networking
 └── security
+
+```
