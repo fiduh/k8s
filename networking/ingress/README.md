@@ -34,6 +34,8 @@ Gateway API came into the picture to address these drawbacks of Ingress API spec
   - Portability: Since we now have standazied CRDs, it becomes easier to switch Gateway API Controllers
   - Native support for non-http protocols like TCP, UDP, etc, available protocols a Gateway controller implementation supports is intended to be extensible, and each supported protocol will have an associated Route resources. e.g. HTTPRoute, TLSRoute, GRPCRoute, TCPRoute, etc.
 
+#### Solve both ingress and services to service communication problems using Gateway API
+
 #### Steps to use Ingress API
 
 ```bash
