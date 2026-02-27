@@ -53,6 +53,9 @@ The bottom line: eBPF speeds up how traffic gets to the sidecar — it doesn't r
 [Install & Configure Istio](https://istio.io/latest/docs/setup/getting-started/)
 The preferred production approach to install Istio is using Helm, there're Helm charts available for deploying Istio, you can customize them to your liking, you can even use Helm to customize some aspects of the Istio control plane, just to do things like, I only want to deploy an ingressGateway not and egressGateway or maybe I want to turn on the ability to do DNS filtering. Istio can also be deployed using IstioCTL or Istio Operator, both not recommened for production.
 
+- Key things to get a Mesh up and running:
+  - Chose the right profile, because there are several kinds of Istio profiles eg Demo, Default, Ambient, etc. These are different configurations to get started with a certain usecase.
+
 ### Enable Sidecar Injection
 
 ```bash
@@ -108,3 +111,10 @@ Traffic management is Routing rules
 - The idea is to make sure we can capture Telemetry somewhere and export it to a system or solution for further analysis and Istio captures that Telemetry for short-term storage, it's not meant for long term storage but there has to be a sync somewhere where all of this can be stored and then further analyzed down the line. It's normally a situation where you pair Istio with something like Prometheus and Grafana in addition to tools like Kali(visualizer of your traffic flow) and Jagger. Grafana gives you a health pespective of how your services and cluster nodes are performing much more form a standpoint of CPU and Memory, Prometheus takes that a little further and gives you more specifics around those details (Think of Prometheus and Grafana as performance related). This adheres to opeTelemetry standards. Jagger is one of those tools that's responsible for telling us how all of our services connect, so when I make a request it's not just one service that responds to it, if we have a bunch of 5 Pods chained together, in Jagger these five Pods will be a part of what we call a request flow, we have to know the sequence of that request flow and how these services are tied together. There's something called B3 header propagation or better known as X header ID, which is a unique ID that ties every single one of those hops together, so it stitches them together so we can visualize, another way to look at this is I am curling to get a response from Service A, Service A talks to Service B, Service B talks to Service C, Service C talks to Service D, before I get my response. Now that B3 header information or X header ID information is consistent between those four Services, signifying that they're tied together for this given request, we call this a Trace, within a Trace we have several spans, each of those hops is considered a Span. This information is very powerful to have if someone is trying to debug.
 
 ### Service Mesh vs Ingress
+
+### Istio Sidecarless model called Ambient mesh
+
+- Ambient mesh shifts sidecars to Z tunnel(L4) and Waypoint(L7)
+- In Ambient mesh because we don't have a sidecar deployed along side the main application container, we still need something to service that sidecar functionality model. We deploy something called a Z tunnel and a Waypoint proxy. Z tunnel is more common than a waypoint proxy, here's why, in the regular Envoy sidecar proxy it actually does L4 and L7, it handles layer 4 requests, provided policy and even does things at TCP. Now in Ambient mesh we split that functionality into TCP based functionality and UDP based functionality and then the layer 7 stuffs. The reason this was also done is to reduce the overall footprint of the Z tunnel resource and only let it do things like mTLS and layer 4 policy and some observability, but if we want to do layer 7 authorization, any sort of fancy rate limiting or any sort of resiliency or even some authorization policy for like HTTP methods, that's where the Waypoint comes in as needed. Z Tunnel is built in Rust and is a Rust based proxy.
+
+https://www.udemy.com/course/aws-certified-devops-engineer-professional-hands-on/
