@@ -260,7 +260,7 @@ sudo chown $(id -u):$(id -g) $HOME/.kube/config
 
 ```bash
 echo 'source <(kubectl completion bash)' >>~/.bashrc
-echo 'alias k=kubectl' >>~/.bashrc
+echo 'alias k=kubectl' >> ~/.bashrc
 echo 'complete -o default -F __start_kubectl k' >>~/.bashrc
 
 
@@ -312,3 +312,23 @@ As a parameter, provide the JSONPath of the object you’d like to render detail
 ```bash
 ​​kubectl explain pods.spec
 ```
+
+### DNS
+
+Kubelet supplies each Pod with the DNS server location at /etc/resolv.conf
+Configuration for kubelet is located at /var/lib/kubelet/config.yaml
+
+- Service fully qualified domain name(FQDN):
+  <servicename>.<namespace>.svc.cluster.local
+  nginx-svc.default.svc.cluster.local
+
+- Configure Service IP Address:
+  - How Service Names are mapped to IP Addresses:
+    Services IP address range is defined in Kube API Server Configuration located at /etc/kubernetes/manifests/kube-apiserver.yaml
+    --service-cluster-ip-range=10.96.0.0/12
+    These are internal service IP Addresses that only the applications in the cluster can use to access the services.
+  - Kubeadm provisions and creates the Kube API server configuration, so how does Kubeadm actually get the Service AIP Address range?
+    If we look at the kubeadm init --help command and it's options, one of the options we see is --service-cidr and its default range is "10.96.0.0/12", you can also specify an alternative IP Address range.
+  - Check for the Kubeadm default configuration values:
+    kubeadm config print init-defaults
+    Gives you a list of all the default values kubeadm will initialize your cluster with.
