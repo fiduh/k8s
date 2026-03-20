@@ -1,6 +1,6 @@
 ## What's a Service Mesh & Why do you need it?
 
-Service mesh is a framework(Set of principles for Observability, Security, and Connectivity Pillars) and platform(means it's pluggable, anything can connect in, be it a micoservice or function) where microservices have the ability to discover each other, connect to each other, but also provide authentication and authorization mechanisms, so there's trust and identity build into every single communication stream.
+Service mesh is a framework(Set of principles for Observability, Security, and Connectivity Pillars) and platform(means it's pluggable, anything can connect in, be it a microservice or function) where microservices have the ability to discover each other, connect to each other, but also provide authentication and authorization mechanisms, so there's trust and identity build into every single communication stream.
 
 - Service mesh as a framework: Set of principles that we want to align to create resilient microservices, it offers the pillars of Observability, Security, and Connectivity(Traffic management).
   - Service mesh as a platform: Specific implementation of those specific pillars.
@@ -14,33 +14,26 @@ Service mesh is a framework(Set of principles for Observability, Security, and C
 
 ### Why Istio? Because implementations of service mesh already existed before Istio
 
-- Istio uses an opensource reverse proxy called Envoy which handles connections, it can allow you to enforce policy, it also allows you to provide an observability point and other capabilities that can be highly customized. Istio takes advantage of this very high-powered proxy, but also automate it and the make it available to workloads in a very simplistic manner. So you can use Envoy but through a control plane that abstracts how you would configure Envoy and this primarily because Envoy itself is very complex to configure. Istio solves this particular problem where it will simplify how you would configure envoy but you wouldn't have to directly configure it.
+- Istio uses an open source reverse proxy called Envoy which handles connections, it can allow you to enforce policy, it also allows you to provide an observability point and other capabilities that can be highly customized. Istio takes advantage of this very high-powered proxy, but also automate it and the make it available to workloads in a very simplistic manner. So you can use Envoy but through a control plane that abstracts how you would configure Envoy and this primarily because Envoy itself is very complex to configure. Istio solves this particular problem where it will simplify how you would configure envoy but you wouldn't have to directly configure it.
 
 ### It's Istio implementation
 
-- In namespaces where Istio is enabled, Istio adds another conatiner(Sidecar container) to the existing contains in every pod.
+- In namespaces where Istio is enabled, Istio adds another container(Sidecar container) to the existing contains in every pod.
 - The side car container is an envoy proxy server which handles traffic management of the pods. It intercepts traffic going in or out of containers in a pod.
 - IstioD is the primary component of Istio called the control plane and runs as Pod in the cluster.
-- Anything that you pass as a YAML configuaration that Istio understands, IstioD will then take that configuaration and translate it for Envoys understanding and that becomes a configuartion. This connection, translation and issuance of configuration happens through something called the XDS data plane which is part of envoy. XDS data plane is the mechanism and the lane way for which istio sends configs to Envoy.
+- Anything that you pass as a YAML configuration that Istio understands, IstioD will then take that configuration and translate it for Envoys understanding and that becomes a configuration. This connection, translation and issuance of configuration happens through something called the XDS data plane which is part of envoy. XDS data plane is the mechanism and the lane way for which istio sends configs to Envoy.
 
 ### Admission Controllers
 
 - How Istio adds Sidecar containers to every Pod, when a request is sent to the API server for a Pod creation, Istio should immediately be notified, so it can decide if it wants to add a Side car container to it, Istio uses an advanced concept Admission controllers called Dynamic Admission control or Admission webhook to achieve this.
   - A simple request to the API server, for instance a user wants to create a Pod in Kubernetes Cluster (using kubectl apply ....), request goes to the API server, a component in the API server checks if the user is authenticated and authorized to perform this request or not, if the user is authenticated and authorized, then API server will take this object and persist(stores) it in etcd. Admission controllers can intercept(Mutate or Validate) the request before it's persisted in etcd.
-  - For example, lets say you want to create a PVC and you didn't add a storageClass in the PVC object, before the resource is added to etcd, there's an admission controller called storageClass admission controller, it will check if the PVC has the storage class field or not, if it doesn't. It will mutate the object and add the field, then the object is persisted in etcd. There are about 30+ admission controllers available by default in every Kubernetes cluster, you don't have to install them, they are precompiled into the API server. sudo cat /etc/kubernetes/manifests/kube-apiserver.yaml . Check the command argument --enablle-admision-plugins
-  - How Istio implements addmission controllers, if you look at all the other admission controllers, they are precompilled into the API server, API server clearly knows how to invoke them and what action will those admission controllers take, either mutate or validate an object. In the case of Istio to add a side car controller, Istio should know when a pod creation request comes to the API server and some how API server should notify Istio now you can proceed with the side car injection, the concept is called Dynamic Admission Control.
+  - For example, lets say you want to create a PVC and you didn't add a storageClass in the PVC object, before the resource is added to etcd, there's an admission controller called storageClass admission controller, it will check if the PVC has the storage class field or not, if it doesn't. It will mutate the object and add the field, then the object is persisted in etcd. There are about 30+ admission controllers available by default in every Kubernetes cluster, you don't have to install them, they are precompiled into the API server. sudo cat /etc/kubernetes/manifests/kube-apiserver.yaml . Check the command argument --enablle-admission-plugins
+  - How Istio implements admission controllers, if you look at all the other admission controllers, they are precompiled into the API server, API server clearly knows how to invoke them and what action will those admission controllers take, either mutate or validate an object. In the case of Istio to add a side car controller, Istio should know when a pod creation request comes to the API server and some how API server should notify Istio now you can proceed with the side car injection, the concept is called Dynamic Admission Control.
     - This happens in multiple stages, Pod creation request comes to the API server, API server performs Authentication and Authorization, then there are two special admission controllers "Mutating Admission webhook controller" and "Validation Admission webhook controller". The responsibilities of these controllers is to take requests from the API server and they notify Istio or any other project that wants to implement the side car injection or any kind of mutation and validation, these components do not directly perform the mutation and validation, it only forwards the requests to "ISTIOD Admission webhook(part of ISTIOD)", this ISTIOD webhook then performs the mutation logic(Injects the sidecar container) and object is persisted into etcd.
 
 ### Buzz about EBPF, how will it affect service mesh, will it replace it?
 
-EBPF in some ways has augmented and helped the performance of Istio in certain ways, but it's not going to be a replacement in any way.
-A Pod is what we call a networking namespace and within that Pod it has a single TCP IP stack, it has an IP address, this is the way the pod can communicate with the rest of the network and other Pods, but if I deploy a Sidecar, I have two containers now running in that Pod and if those two containers have thesame IP, how do we know to distinguish between those two containers? So we use PORT numbers, PORT numbers create some distinction, so one container can call the other container on a given PORT through something called Local Host, so we know who we're trying to communicate with but it'll all be contained within that same Pod or network namespace.
-Anytime the main application container needs to make an external call or a call to another service that has to flow through the sidecar container proxy, in fact it has to know how to get to the sidecar proxy and then the sidecar proxy will then route the request to it's destination, in other for that to happen when you actually deploy Istio and you turn on something called sidecar injection and then you deploy a new application into a sidecar enabled namespace, IP tables is rewritten so that traffic now forwards through the proxy. The key here is that traffic has to go from the main application to the sidecar proxy, there might be some latency in that situation. Latency means the request might be slower to respond and that could be problematic.
-The way EBPF works is that it optimizes traffic and its movement in the kernel space, so it's able to make decisions very quickly in the kernel space and so you can use EBPF logic to optimize kernel space traffic and optimize the way the flow goes from the main app to the sidecar. Long way to say will EBPF change Istio? yes and no; it won't replace things that happen in Istio but it can provide some optimizations for the way traffic moves between an application container and its sidecar.
-
-When we are talking about the kernel, we are talking about the host machine that all the Pods are sitting on. EBPF is not Pod specific, it's Host Machine specific.
-
-eBPF augments Istio's performance but does not replace it. To understand why, consider how a Pod works: it's a network namespace with a single IP address. When a sidecar container is injected, both containers share that IP and are distinguished by port numbers, communicating via localhost. Any traffic from the main application to an external service must flow through the sidecar proxy — made possible by Istio rewriting iptables rules on deployment so that traffic is redirected through the proxy. This redirection introduces some latency.
+eBPF augments Istio's performance but does not replace it. To understand why, consider how a Pod works: it's a network namespace with a single IP address(TCP IP stack). When a sidecar container is injected, both containers share that IP and are distinguished by port numbers, communicating via localhost. Any traffic from the main application to an external service must flow through the sidecar proxy — made possible by Istio rewriting iptables rules on deployment so that traffic is redirected through the proxy. This redirection introduces some latency.
 eBPF optimizes this by operating in kernel space, where it can make routing decisions much faster. Specifically, it can replace iptables-based traffic redirection with more efficient kernel-level handling, reducing the latency between the application container and its sidecar. What eBPF cannot do is replicate the higher-level functionality of the sidecar itself (traffic management, mTLS, retries, etc.).
 The bottom line: eBPF speeds up how traffic gets to the sidecar — it doesn't replace what the sidecar does. It's a host-level (node-level) technology, not Pod-specific, so its optimizations apply across all Pods on a given machine.
 
@@ -51,10 +44,10 @@ The bottom line: eBPF speeds up how traffic gets to the sidecar — it doesn't r
 ### Install Istio
 
 [Install & Configure Istio](https://istio.io/latest/docs/setup/getting-started/)
-The preferred production approach to install Istio is using Helm, there're Helm charts available for deploying Istio, you can customize them to your liking, you can even use Helm to customize some aspects of the Istio control plane, just to do things like, I only want to deploy an ingressGateway not and egressGateway or maybe I want to turn on the ability to do DNS filtering. Istio can also be deployed using IstioCTL or Istio Operator, both not recommened for production.
+The preferred production approach to install Istio is using Helm, there're Helm charts available for deploying Istio, you can customize them to your liking, you can even use Helm to customize some aspects of the Istio control plane, just to do things like, I only want to deploy an ingressGateway not and egressGateway or maybe I want to turn on the ability to do DNS filtering. Istio can also be deployed using IstioCTL or Istio Operator, both not recommended for production.
 
 - Key things to get a Mesh up and running:
-  - Chose the right profile, because there are several kinds of Istio profiles eg Demo, Default, Ambient, etc. These are different configurations to get started with a certain usecase.
+  - Chose the right profile, because there are several kinds of Istio profiles eg Demo, Default, Ambient, etc. These are different configurations to get started with a certain use case.
 
 ### Enable Sidecar Injection
 
@@ -68,9 +61,9 @@ kubectl label namespace <namespace-name> istio-injection=enabled
 - Load Balancing
 - Service to Service authentication: this can easily be broken down to authenticating your requests, how mTLS functions, how certificates are issued. We can even breakdown the service-service authorization and how Istio enforces policies.
 - Monitoring, Tracing and Logging: The reason why we would want to do Monitoring and Logging within our service mesh is really to understand the traffic part of a request, there might be multiple services that are hitting that path before a request provides a response. If there's a failed service we want to know about it, why it failed and how to recover from it. There are capabilities such as tracing that are built into the service mesh, we are able to extract logging information from a sidecar point of view and we're able to pair with tools like Prometheus and Grafana to capture some more Telemetry.
-- Service resiliency: It's about tunning your microservices and the way and how quickly they respond, so if we haven't truely implememnted autoscaling, we could be in a situation where one service is overloaded with a number of requests and because of the fact that it's overloaded that could traslate to an over consumption of CPU and memory, when it runs out of CPU and Memory what happens? it cannot do anything, it's like halted at that point. So we have to accomodate for that level of buffering and flow control so that when we send out a request we shouldn't expect a quick response, but if we are, we have to tune the rest of that request path acordingly
+- Service resiliency: It's about tunning your microservices and the way and how quickly they respond, so if we haven't truly implemented autoscaling, we could be in a situation where one service is overloaded with a number of requests and because of the fact that it's overloaded that could translate to an over consumption of CPU and memory, when it runs out of CPU and Memory what happens? it cannot do anything, it's like halted at that point. So we have to accommodate for that level of buffering and flow control so that when we send out a request we shouldn't expect a quick response, but if we are, we have to tune the rest of that request path accordingly
 
-- Some pre-requisities for Pods to be part of Istio Service Mesh:
+- Some pre-requisites for Pods to be part of Istio Service Mesh:
   - Pods should always run behind one or more service
   - Pods should not run with a security context with user id 1337
   - Pods should run with NET_ADMIN and NET_RAW capabilities
@@ -91,15 +84,103 @@ Traffic management is Routing rules
 
 - Translates a hostname to a kubernetes service, once it finds that match of the kubernetes service by default as long as there's no other policy applied to it, it will forward that request to the label that matches that kubernetes service which happens to be the Pod.
 
+**Canary Release**
+Deploy a new version of software component (for us, new image). **_But only make the new image "live" for a percentage of the time_**
+Most of the time, the old (definitely working ) version is the one being used.
+
+**_A Virtual Service enable us to configure custom routing rules to the service mesh_**
+
+**Virtual Service Configuration**
+
+```bash
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: reviews-route. # "Just" a name for this virtual service
+  namespace: default # Put VS in the same namespace as the target service
+spec:
+  hosts:
+  - reviews.default.svc.cluster.local # The Service DNS (ie the fully qualified name of  regular k8S Service) Name that we're applying routing rules to.
+  http:
+  - route:
+      - destination:  # Destination could be different services, it intercepts traffic intended for spec.hosts
+          host: reviews.default.svc.cluster.local # Target DNS name where the intercepted traffic should go.
+          subset: stable-group # This is pointing to one of the names defined in the DestinationRule subsets
+        weight: 90
+      - destination:
+          host: reviews.default.svc.cluster.local # Target DNS name
+          subset: canary-group # also pointing to a name in the destinationRule subsets
+        weight: 10
+
+```
+
 ### Destination Rules
 
-### Circult Breaking
+```bash
+# A configuration for a load balancer for a particular service.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule # Defining which pods should be part of each subset. e.g., subset V2 which is acting as the canary and v1 which is not the canary.
+metadata:
+  name: reviews-destination # Doesn't matter what you call this
+  namespace: default
+spec:
+  host: reviews.default.svc.cluster.local # Service fully qualified domain
+  subsets: # All the pods that are part of the spec.host service
+  - name: stable-group # Group all the pods with label version: v1 and call it v1
+    labels:  # This is a SELECTOR for the pods that are part of a service.
+      version: v1 # This is saying find pods with the label "v1"
+  - name: canary-group # Group all the pods with label version: v2 and call it v2
+    labels:
+      version: v2
+```
 
-### mTLS (Multual TLS)
+### Load Balancing
 
-- The concept of Authentication: normally when we have to authenticate to something we issue a username and password, that's the most common approach, but services that communicate amongst each other are not going to say take my username and password and verify that it's a legitimate username in your database. So the mechanism that is normally preferred is to use client certificates or more specifically transport layer certificates or even more specifically transport layer authentication and encryption, TLS is the short form of it. The simple idea is I'm going to make a request out to you but you have to verify to me that you're authentic and you're legitimate and you're who you say you're and if you are who you say you are then the transaction can go through fine, and that's what we call one way TLS. Now if I communicate with a server and the server comes back to me and says I also want to validate you to see who you are and you truly are who you say you are, once I validated that then we can have bidirectional communication. In Istio there's this concept called peer authentication which enables us to determine if we have sidecar resources that can authenticate to us. If they have a sidecar and a certificate issued and the policy says you're allowed to talk to each other then we can authenticate each other and our communication stream can go through but also that mTLS offers up encryption so the traffic(payloads) that's in motion between these two workloads is encrypted. i.e the traffic between workloads adheres to Mutal authentication and encryption - All we are really doing with this is solving the Identities and solving the payload encryption piece, but there's another piece of authorization(What services can do and what actions can they perform against other services. This ensures that RBAC is in effect).
+Options we can apply to change the load balancing algorithm on a Virtual Service.
+
+Can we make getting a canary or a non canary to stick? Can we make it that if a user visits a site for the first time, 90% of the time they will get one version and 10% of the time they will get the other version but for every subsequent requests from that user, they get the same response back?
+
+Is it possible to use the weighted destination rules to make a single user "stick" to a canary?
+No we can't make it work using the weighting functionality provided by Virtual service
+
+**Session Affinity ("Stickiness")**
+The DestinationRule has a field called trafficPolicy, it's related to the loadbalancer settings
+
+**What is Consistent Hashing useful for?**
+Here's a general example that can happen anywhere, you have a set of pods they could be sets of software components (Pod(Canary) -- Pod(Non Canary)), then a client accessing these pods, with the load balancer we use in kubernetes (The default algorithm we use in load balancers is round robin), the first request from the client will hit the load balancer and directed to Pod(Canary), the the next request will go to Pod(Non Canary), so on and so forth.
+But there're different algorithms that can be applied to load balancers, consistent hashing is one of them.
+The deal with consistent hashing is we arrange things in such away that the client has some kind of data, as a simple example the client has an IP address. Now let's use that as an example, what consistent hashing will do in a load balancer is when the request is received by the load balancer, it will also receive a copy of the data and run that data through a hashing algorithm, doesn't matter what the algorithm is, any hash algorithm will do. The hash algorithm is an algorithm that will take the data, run it through some kind of routine and out will come a value that's completely different to the value that went in. Crucial aspect of a hashing algorithm is if you feed the same data in again you will get the same has back out again. The same data in will always give the same data back out.
+In consistent hashing the load balancer will use the result of this hash to decide which of the targets to forward to.
+When client makes subsequent requests and if the data passed by the client to the loadbalancer is always the same, then that traffic will be sent to the same target all the time.
+
+```bash
+# Note this is not going to work
+# Session affinity doesn't apply to weighted subsets - Envoy doesn't support it.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: reviews-destination
+  namespace: default
+spec:
+  host: reviews.default.svc.cluster.local
+  trafficPolicy:
+    loadBalancer: #Options: simple or consistentHash
+      consistentHash: #Options: httpCookie, httpHeaderName, httpCookie, useSourceIp, httpQueryParameterName, ringHash, maglev
+        useSourceIp: true
+  subsets: ....
+```
+
+Then what's consistentHashing without weighting useful for?
+
+### Gateways
+
+### Circuit Breaking
+
+### mTLS (Mutual TLS)
+
+- The concept of Authentication: normally when we have to authenticate to something we issue a username and password, that's the most common approach, but services that communicate amongst each other are not going to say take my username and password and verify that it's a legitimate username in your database. So the mechanism that is normally preferred is to use client certificates or more specifically transport layer certificates or even more specifically transport layer authentication and encryption, TLS is the short form of it. The simple idea is I'm going to make a request out to you but you have to verify to me that you're authentic and you're legitimate and you're who you say you're and if you are who you say you are then the transaction can go through fine, and that's what we call one way TLS. Now if I communicate with a server and the server comes back to me and says I also want to validate you to see who you are and you truly are who you say you are, once I validated that then we can have bidirectional communication. In Istio there's this concept called peer authentication which enables us to determine if we have sidecar resources that can authenticate to us. If they have a sidecar and a certificate issued and the policy says you're allowed to talk to each other then we can authenticate each other and our communication stream can go through but also that mTLS offers up encryption so the traffic(payloads) that's in motion between these two workloads is encrypted. i.e the traffic between workloads adheres to Mutual authentication and encryption - All we are really doing with this is solving the Identities and solving the payload encryption piece, but there's another piece of authorization(What services can do and what actions can they perform against other services. This ensures that RBAC is in effect).
 - The user is going to be responsible for enabling something called **peerAuthentication** which is a custom resource in Istio. This simply enables the authentication as well as the encryption aspects of the service to service communication in security.
-- Seperately a user will also have to enable authorization so that when we make HTTP requests between services they can only perform request methods like get versus a delete. This is handled by an Istio resource called **authourizationPolicy**
+- Separately a user will also have to enable authorization so that when we make HTTP requests between services they can only perform request methods like get versus a delete. This is handled by an Istio resource called **authorizationPolicy**
 
 ### Gateways
 
@@ -107,8 +188,8 @@ Traffic management is Routing rules
 
 - Within Observability there's this concept that we are trying to align to: Latency, Errors, Traffic and Saturation (LETS) - The Golden signals of Traffic.
 - Istio aims to provide these metrics on these four Golden Signals, so you can discern how services are responding, if they are responding quickly enough, if they are returning the right HTTP status codes, if they are met with some latency, if there are failed requests in a given amount of time and that's all important for building the resiliency into our microservices.
-- Istio provides you the facility to capture logging, tracing information and even metrics around latency or failed requests or even a given amount of requests in a certain period of time. That data that you take is allowing you to decide how you best tune your environment, but it's also telling of failures, any sort of caling limitations that you're currently experiencing and even tells you about any errors that you might be seeing inside of your mesh configuration. It's a great mechanism to help you troubleshoot aspects of services in your mesh.
-- The idea is to make sure we can capture Telemetry somewhere and export it to a system or solution for further analysis and Istio captures that Telemetry for short-term storage, it's not meant for long term storage but there has to be a sync somewhere where all of this can be stored and then further analyzed down the line. It's normally a situation where you pair Istio with something like Prometheus and Grafana in addition to tools like Kali(visualizer of your traffic flow) and Jagger. Grafana gives you a health pespective of how your services and cluster nodes are performing much more form a standpoint of CPU and Memory, Prometheus takes that a little further and gives you more specifics around those details (Think of Prometheus and Grafana as performance related). This adheres to opeTelemetry standards. Jagger is one of those tools that's responsible for telling us how all of our services connect, so when I make a request it's not just one service that responds to it, if we have a bunch of 5 Pods chained together, in Jagger these five Pods will be a part of what we call a request flow, we have to know the sequence of that request flow and how these services are tied together. There's something called B3 header propagation or better known as X header ID, which is a unique ID that ties every single one of those hops together, so it stitches them together so we can visualize, another way to look at this is I am curling to get a response from Service A, Service A talks to Service B, Service B talks to Service C, Service C talks to Service D, before I get my response. Now that B3 header information or X header ID information is consistent between those four Services, signifying that they're tied together for this given request, we call this a Trace, within a Trace we have several spans, each of those hops is considered a Span. This information is very powerful to have if someone is trying to debug.
+- Istio provides you the facility to capture logging, tracing information and even metrics around latency or failed requests or even a given amount of requests in a certain period of time. That data that you take is allowing you to decide how you best tune your environment, but it's also telling of failures, any sort of calling limitations that you're currently experiencing and even tells you about any errors that you might be seeing inside of your mesh configuration. It's a great mechanism to help you troubleshoot aspects of services in your mesh.
+- The idea is to make sure we can capture Telemetry somewhere and export it to a system or solution for further analysis and Istio captures that Telemetry for short-term storage, it's not meant for long term storage but there has to be a sync somewhere where all of this can be stored and then further analyzed down the line. It's normally a situation where you pair Istio with something like Prometheus and Grafana in addition to tools like Kali(visualizer of your traffic flow) and Jagger. Grafana gives you a health perspective of how your services and cluster nodes are performing much more form a standpoint of CPU and Memory, Prometheus takes that a little further and gives you more specifics around those details (Think of Prometheus and Grafana as performance related). This adheres to opeTelemetry standards. Jagger is one of those tools that's responsible for telling us how all of our services connect, so when I make a request it's not just one service that responds to it, if we have a bunch of 5 Pods chained together, in Jagger these five Pods will be a part of what we call a request flow, we have to know the sequence of that request flow and how these services are tied together. There's something called B3 header propagation or better known as X header ID, which is a unique ID that ties every single one of those hops together, so it stitches them together so we can visualize, another way to look at this is I am curling to get a response from Service A, Service A talks to Service B, Service B talks to Service C, Service C talks to Service D, before I get my response. Now that B3 header information or X header ID information is consistent between those four Services, signifying that they're tied together for this given request, we call this a Trace, within a Trace we have several spans, each of those hops is considered a Span. This information is very powerful to have if someone is trying to debug.
 
 ### Service Mesh vs Ingress
 
@@ -116,5 +197,3 @@ Traffic management is Routing rules
 
 - Ambient mesh shifts sidecars to Z tunnel(L4) and Waypoint(L7)
 - In Ambient mesh because we don't have a sidecar deployed along side the main application container, we still need something to service that sidecar functionality model. We deploy something called a Z tunnel and a Waypoint proxy. Z tunnel is more common than a waypoint proxy, here's why, in the regular Envoy sidecar proxy it actually does L4 and L7, it handles layer 4 requests, provided policy and even does things at TCP. Now in Ambient mesh we split that functionality into TCP based functionality and UDP based functionality and then the layer 7 stuffs. The reason this was also done is to reduce the overall footprint of the Z tunnel resource and only let it do things like mTLS and layer 4 policy and some observability, but if we want to do layer 7 authorization, any sort of fancy rate limiting or any sort of resiliency or even some authorization policy for like HTTP methods, that's where the Waypoint comes in as needed. Z Tunnel is built in Rust and is a Rust based proxy.
-
-https://www.udemy.com/course/aws-certified-devops-engineer-professional-hands-on/
