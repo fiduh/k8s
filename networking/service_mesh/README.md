@@ -172,7 +172,53 @@ spec:
 
 Then what's consistentHashing without weighting useful for?
 
-### Gateways
+### Edge Proxies and Gateways
+
+Configuring instance of envoy that sits at the edge of your cluster, configured to listen to all incoming requests from the outside world, which means we can configure the regular envoy proxy rules such as a 90% - 10% canary. Istio Ingress Gateway allows us to configure an edge proxy. You can configure the gateway using regular Istio config, traffic are routed through the proxy and there for the Virtual service rules can be applied. The Istio ingress gateway creates a service of loadBalancer, which inturn creates a physical loadBalancer in a cloud provider, your users will access your service through the loadBalancer endpoint.
+
+```bash
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: ingress-gateway-configuration
+spec:
+  selector:
+    istio: ingressgateway # use Istio default gateway implementation
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*" # External facing Domain name of the website
+---
+
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: webapp
+  namespace: default
+spec:
+  hosts: # which incoming host are we applying the proxy rules to?
+  - "*" # Copy the value in the gateway host
+  - webapp.default.svc.cluster.local # the value of the internal service
+  gateways:
+  - ingress-gateway-configuration
+  http:
+  - route:
+    - destination:
+        host: webapp
+        subset: original
+      weight: 90
+    - destination:
+        host: webapp
+        subset: experimental
+      weight: 10
+
+```
+
+You don't 100% need an Istio gateway, the gateway however becomes essential if you want to apply custom traffic rules to any services which are referred to as been on the edge, for example a webapp service that's been access directly from outside the cluster. It really means the first service in a chain that's been accessed.
+If you don't have the gateway the proxies can't be used fro traffic management because because it's run after a target container is run, so by introducing an istio gateway, this is really just a proxy that you're putting in front of your application and that means custom traffic rules can be applied to the first service in a chain, referred to as the edge service.
 
 ### Circuit Breaking
 
