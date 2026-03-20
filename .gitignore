@@ -4,3 +4,4 @@
 /eksctl/nginx*
 /eksctl/dump.yml
 /eksctl/learn-k8
+.vscode/
