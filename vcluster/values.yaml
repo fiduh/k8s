@@ -1,0 +1,11 @@
+experimental:
+ docker:
+  nodes:
+  - name: "worker-1"
+    ports:
+     - "9090:9090"
+  - name: "worker-2"
+    volumes:
+     - "/tmp/data:/data"
+    env:
+     - "NODE_ROLE=worker"
