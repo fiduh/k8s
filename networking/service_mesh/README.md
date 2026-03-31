@@ -12,9 +12,17 @@ Service mesh is a framework(Set of principles for Observability, Security, and C
     - Observability (Service mesh like Istio integrates well with Kiali(Visualization tool for services in a cluster))
     - Circuit breaking, Traffic splitting, Fault injection, etc.
 
+- Traffic Management
+- Resilience and Fault Injection
+- Secure Workloads
+- Troubleshooting
+
 ### Why Istio? Because implementations of service mesh already existed before Istio
 
 - Istio uses an open source reverse proxy called Envoy which handles connections, it can allow you to enforce policy, it also allows you to provide an observability point and other capabilities that can be highly customized. Istio takes advantage of this very high-powered proxy, but also automate it and the make it available to workloads in a very simplistic manner. So you can use Envoy but through a control plane that abstracts how you would configure Envoy and this primarily because Envoy itself is very complex to configure. Istio solves this particular problem where it will simplify how you would configure envoy but you wouldn't have to directly configure it.
+
+Envoy proxy is like a traffic controller for your application. In a large distributed system where there are many application(services) that need to talk to each other, envoy proxy makes sure the messages between those services get to the right place in the fastest and safest way possible.
+In a Kubernetes ecosystem the envoy proxy(sidecar) is a completely separate container that runs along side your main application workload and acts as the middle man intercepting all communication in and out of the application, it will route traffic choosing the best path to deliver the message, it also acts as a loadBalancer distributing traffic across multiple instances(Pods) of a service, also makes sure that the communication between services is secure, it encrypts the message so that no one can snoop in on it and it also ensures that only trusted services can talk to one another, it also enables system monitoring, tracks volume of traffic to each application, how long it takes to get a response(measures response times) and if any applications are having issues.
 
 ### It's Istio implementation
 
@@ -22,6 +30,29 @@ Service mesh is a framework(Set of principles for Observability, Security, and C
 - The side car container is an envoy proxy server which handles traffic management of the pods. It intercepts traffic going in or out of containers in a pod.
 - IstioD is the primary component of Istio called the control plane and runs as Pod in the cluster.
 - Anything that you pass as a YAML configuration that Istio understands, IstioD will then take that configuration and translate it for Envoys understanding and that becomes a configuration. This connection, translation and issuance of configuration happens through something called the XDS data plane which is part of envoy. XDS data plane is the mechanism and the lane way for which istio sends configs to Envoy.
+
+Istio is an orchestrator that facilitates the management of Envoy Proxies.
+Architecture:
+
+- Istio service mesh has two components: Data plane and Control plane.
+  - Data plane is responsible for managing and controlling traffic between microservices, it deploys sidecar proxies(Envoy Proxies) alongside each workloads and handles routing, loadBalancing, encryption using MTLS and security authentication.
+  - Control plane is responsible for managing and configuring the Data plane, it handles distributing policies(Network policies), Certificate, managing Service Discovery, Authentication, Authorization and dynamically updating configuration for all of the proxy sidecars, all of this is handled by IstioD(It's a Pod or the Pilot container) that runs inside of the cluster when you install Istio.
+    - IstioD provides Service discovery and configuration, It translates high level routing rules that govern traffic behavior in Envoy Proxy specific configuration and applies it to the sidecars at run time, It also acts as Certificate authority and generates Certificates to allow secure mTLS communication between the workloads, allows you to do secure service to service and end user authentication with built-in Identity and credential management, additionally you can use Istio's authorization feature to control who has access to your services.
+
+**Why use Istio?**
+
+- Traffic Management:
+  - Istio enables you to customize traffic routing based on different criteria, you can do Traffic splitting, canary releases, mirroring, etc. Without something like Istio, you will go back to using an application loadBalancer to distribute traffic but you lack that fine grained control that Istio offers.
+- Security:
+  - Istio automatically encrypts traffic between workload using mTLS, with something like Istio service mesh you would send unencrypted traffic between workloads, you will be managing TLS certs if you did need to encrypt traffic.
+- Policies:
+  - Istio allows you to implement access control policies and configure to only accept traffic from authorized services.
+- Observability:
+  - Istio provides centralized logging, makes it easier to aggregate and analyze logs, you can use tools like Jagger or Datadog APM, to trace, debug and optimize microservices.
+- Resilience and Reliability:
+  - Istio allows you to implement resilient strategies like circuit breaking, timeouts, retries, mitigation of cascading failures during a service degradation, without something like Istio, you have to build a combination of practices where devs are implementing circuit breakers, timeouts within the workloads to prevent these cascading failures and it's a lot of work.
+
+One of the best reasons to use Istio is the Reduced operational overhead. Istio reduces the manual operation burden of managing proxies, encrypting traffic, building extended logging, traffic routing, etc. Developers no longer need to code all these things into the application because Istio will handle all off that. Istio is transparent to the developers, the workload(application) doesn't even know the sidecar proxy is there.
 
 ### Admission Controllers
 
@@ -220,15 +251,49 @@ spec:
 You don't 100% need an Istio gateway, the gateway however becomes essential if you want to apply custom traffic rules to any services which are referred to as been on the edge, for example a webapp service that's been access directly from outside the cluster. It really means the first service in a chain that's been accessed.
 If you don't have the gateway the proxies can't be used fro traffic management because because it's run after a target container is run, so by introducing an istio gateway, this is really just a proxy that you're putting in front of your application and that means custom traffic rules can be applied to the first service in a chain, referred to as the edge service.
 
+### Fault Injection
+
+We can for any virtual service change the configurations so that Istio will automatically throw an error for a percentage of the time, we can also make a service run slowly by adding delays to any request.
+But why would you want to? One of the main considerations of building any distributed architecture is that you can never have 100% reliability, it's just impossible. By definition we are making network calls in a distributed system and you should never assume that a network is 100% reliable.
+It's fool hardy to try to design a system that aims to be 100% reliable. In the industry we have accepted this wisdom and now generally we understand that for a distributed system you have to have fault tolerance.
+
+[Fallacies of distributed computing](https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing)
+
+[Navigating the 8 fallacies of distributed computing](https://ably.com/blog/8-fallacies-of-distributed-computing)
+
+Bearing in mind in a microservice architecture, you must always assume that a particular Pod(in our case a kubernetes system) can fail at anytime, maybe the Pod runs out of resources, maybe it get rescheduled to another Node because it's been evicted, maybe the whole Node crashes for some reason taking many Pods down with it.
+From regular Kubernetes we can mitigate against that by having multiple replicas of a particular Pod and that's a good strategy for critical Pods, but often times we want to design things so if a particular microservice goes down for any reason, then the system will proceed, everything won't fall in a heap, it maybe degraded in some way, there might be some feature missing but generally we want the system to still continue.
+
+Fault injection answers the question what will happen if a service failed. In the past this might be done by deleting the Pod or creating the version of the Pod which has random failures to it, but we can do all of this using the VirtualService in Istio.
+
+```bash
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ratings
+spec:
+  hosts:
+  - ratings
+  http:
+  - fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 5s
+    route:
+    - destination:
+        host: ratings
+```
+
 ### Circuit Breaking
+
+One of the nastiest problems in distributed architectures and therefore on Kubernetes based systems is a cascading failure. Cascading failure is a general concept in systems(computer networks in this case) that applies to any failure, where one or few parts can trigger the the failure of other parts.
 
 ### mTLS (Mutual TLS)
 
 - The concept of Authentication: normally when we have to authenticate to something we issue a username and password, that's the most common approach, but services that communicate amongst each other are not going to say take my username and password and verify that it's a legitimate username in your database. So the mechanism that is normally preferred is to use client certificates or more specifically transport layer certificates or even more specifically transport layer authentication and encryption, TLS is the short form of it. The simple idea is I'm going to make a request out to you but you have to verify to me that you're authentic and you're legitimate and you're who you say you're and if you are who you say you are then the transaction can go through fine, and that's what we call one way TLS. Now if I communicate with a server and the server comes back to me and says I also want to validate you to see who you are and you truly are who you say you are, once I validated that then we can have bidirectional communication. In Istio there's this concept called peer authentication which enables us to determine if we have sidecar resources that can authenticate to us. If they have a sidecar and a certificate issued and the policy says you're allowed to talk to each other then we can authenticate each other and our communication stream can go through but also that mTLS offers up encryption so the traffic(payloads) that's in motion between these two workloads is encrypted. i.e the traffic between workloads adheres to Mutual authentication and encryption - All we are really doing with this is solving the Identities and solving the payload encryption piece, but there's another piece of authorization(What services can do and what actions can they perform against other services. This ensures that RBAC is in effect).
 - The user is going to be responsible for enabling something called **peerAuthentication** which is a custom resource in Istio. This simply enables the authentication as well as the encryption aspects of the service to service communication in security.
 - Separately a user will also have to enable authorization so that when we make HTTP requests between services they can only perform request methods like get versus a delete. This is handled by an Istio resource called **authorizationPolicy**
-
-### Gateways
 
 ### Observability
 
@@ -239,7 +304,18 @@ If you don't have the gateway the proxies can't be used fro traffic management b
 
 ### Service Mesh vs Ingress
 
-### Istio Sidecarless model called Ambient mesh
+### Istio Sidecar-less model called Ambient mesh
 
 - Ambient mesh shifts sidecars to Z tunnel(L4) and Waypoint(L7)
 - In Ambient mesh because we don't have a sidecar deployed along side the main application container, we still need something to service that sidecar functionality model. We deploy something called a Z tunnel and a Waypoint proxy. Z tunnel is more common than a waypoint proxy, here's why, in the regular Envoy sidecar proxy it actually does L4 and L7, it handles layer 4 requests, provided policy and even does things at TCP. Now in Ambient mesh we split that functionality into TCP based functionality and UDP based functionality and then the layer 7 stuffs. The reason this was also done is to reduce the overall footprint of the Z tunnel resource and only let it do things like mTLS and layer 4 policy and some observability, but if we want to do layer 7 authorization, any sort of fancy rate limiting or any sort of resiliency or even some authorization policy for like HTTP methods, that's where the Waypoint comes in as needed. Z Tunnel is built in Rust and is a Rust based proxy.
+
+Istio's sidecar-less mode Ambient Mesh is faster and more lightweight than the sidecar mode.
+It splits the sidecar functionality into two components, the zTunnel and the Waypoint proxy.
+
+- zTunnel is a Rust based agent deployed as daemonsets across all Nodes, it intercepts inbound and outbound traffic, handles mTLS(encryption and decryption data), authentication and authorization and logging for Pod traffic in the node. Important to note that zTunnel operates at Layer 4(Network Layer), i.e, Manages loadBalancing, Service discovery, and routing to healthy endpoints. One zTunnel per node, the namespace needs to be labeled for Ambient to work.
+- Waypoint is a proxy deployed as a Pod not as a container, it's a standalone workload, not a sidecar proxy like the standard sidecar service mesh. The Waypoint envoy proxy handles Layer 7, like splitting traffic, rewrites, path based routing, header matching, fault injection, etc. Waypoint proxies are deployed per namespace, they do not support a few things, it doesn't support timeouts, retries, or mirroring. Important NOTE! compared to how Istio does things with sidecar mode, you might require kubernetes native resources like HTTPRoute and Gateway API. Waypoint proxies are only deployed when needed, do you need layer 7 capabilities? If so, you need the Waypoint proxy otherwise all traffic stays at Layer 4.
+
+Main benefits of using Istio Ambient Mesh vs Traditional Istio Service Mesh:
+
+- It reduces number of proxies to manage.
+- Slashing cost by reducing the number of compute and memory requirements per node.
