@@ -68,7 +68,7 @@ eBPF augments Istio's performance but does not replace it. To understand why, co
 eBPF optimizes this by operating in kernel space, where it can make routing decisions much faster. Specifically, it can replace iptables-based traffic redirection with more efficient kernel-level handling, reducing the latency between the application container and its sidecar. What eBPF cannot do is replicate the higher-level functionality of the sidecar itself (traffic management, mTLS, retries, etc.).
 The bottom line: eBPF speeds up how traffic gets to the sidecar — it doesn't replace what the sidecar does. It's a host-level (node-level) technology, not Pod-specific, so its optimizations apply across all Pods on a given machine.
 
-### Istio is also conforming to the Gateway API Spec.
+### Istio is also conforming to the Gateway API Spec and a sidecar-less Ambient Mode.
 
 - The Gateway API capabilities are present in Istio and of version 1.17, you are actually offered the option to either use the Istio ingressGateway or the Gateway API spec when you're deploying Istio.
 
@@ -80,11 +80,72 @@ The preferred production approach to install Istio is using Helm, there're Helm 
 - Key things to get a Mesh up and running:
   - Chose the right profile, because there are several kinds of Istio profiles eg Demo, Default, Ambient, etc. These are different configurations to get started with a certain use case.
 
-### Enable Sidecar Injection
+[Install Istio with Helm](https://istio.io/latest/docs/setup/install/helm/)
 
 ```bash
-kubectl label namespace <namespace-name> istio-injection=enabled
+# Install Istio Ambient mode using istioctl cli
+istioctl install --set profile=ambient -y
 
+# when using Ambient mode
+kubectl label namespace <namespace-name> istio.io/dataplane-mode=ambient
+
+# zTunnel takes care of the layer 4 capabilities when using sidecar-less Ambient mode, zTunnel runs as a daemon set on each node.
+
+# If you need layer 7 capabilities like mirroring, fault injection, circuit breaking, etc., then we need to use the waypoint proxy which is a deployment.
+
+istioctl waypoint apply -n <namespace-name>
+# The waypoint proxy handles layer 7 capabilities, with way point you use kubernetes native Gateway API resources like httpRoutes
+
+# Configure the Helm repository:
+helm repo add istio https://istio-release.storage.googleapis.com/charts
+helm repo update
+helm repo list
+
+# display the default values of configuration parameters using the:
+helm show values istio/<chart>
+
+# Install the Istio base chart which contains cluster-wide Custom Resource Definitions (CRDs) which must be installed prior to the deployment of the Istio control plane:
+helm install istio-base istio/base --namespace istio-system --create-namespace --version 1.26.3 --set profile=ambient --set revision=1-26
+# Revision Management: The revision=1-25 flag ensures that istiod is uniquely identified, allowing you to run, for example, a 1-24 revision alongside 1-25.
+
+# Validate the CRD installation with the helm ls command:
+helm ls -n istio-system
+kubectl get crd
+
+# Install the Istio discovery chart which deploys the istiod service:
+helm install istiod istio/istiod --namespace istio system --version 1.26.3 --set revision=1-26 --set profile=ambient --wait
+
+# Verify the Istio discovery chart installation:
+helm ls -n istio-system
+
+# CNI node agent
+# The cni chart installs the Istio CNI node agent. It is responsible for detecting the pods that belong to the ambient mesh, and configuring the traffic redirection between pods and the ztunnel node proxy (which will be installed later).
+$ helm install istio-cni istio/cni -n istio-system --set revision=1-26 --set profile=ambient --wait
+
+# Install the data plane: ztunnel DaemonSet
+# The ztunnel chart installs the ztunnel DaemonSet, which is the node proxy component of Istio’s ambient mode.
+helm install ztunnel istio/ztunnel -n istio-system --set revision=1-26 --wait
+
+
+# Enable Ambient on Namespaces
+kubectl label namespace <your-namespace> istio.io/rev=1-25
+
+# If you want to generate a manifest before installation
+helm template istiod istio/istiod -n istio-system --kube-version {Kubernetes version of target cluster} > istiod.yaml
+
+
+```
+
+**Customize Istio Installation**
+We need to setup the Istio operator
+
+```bash
+istioctl install -f - <<EOF
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  profile: demo
+EOF
 ```
 
 ### Capabilities of Istio
@@ -105,13 +166,28 @@ kubectl label namespace <namespace-name> istio-injection=enabled
 Traffic management is Routing rules
 
 - Components in Traffic Management:
-  - Virtual Services
-  - Destination Rules
-  - Gateways(istioIngressGateway)
-  - Service Entries
+  - Virtual Services: Routing of traffic.
+  - Destination Rules: Demonstrating subsets and load balancing.
+  - Gateways(istioIngressGateway): Exposing traffic to the public.
+  - Service Entries: Introducing external services like Databases to the service mesh.
   - Sidecars
+  - Release strategies (Traffic Mirroring, A/B Testing, etc.)
+  - Solving microservice failures and preventing cascading failures using Circuit Breaking
+  - Resilience through Fault Tolerance
+  - Simulating delays and errors to test behavior
+  - Using Timeouts and Retries to recover from failures.
+  - Istio Ambient Mode (Layer 4 traffic with zTunnel and Layer 7 traffic with Waypoint proxies).
 
 ### Virtual services
+
+Virtual service allows you to configure traffic routing rules for your kubernetes services.
+Why use a virtual service, if kubernetes service already achieves that by forwarding traffic to the deployments, Pods. What else are we really getting out of virtual service? Virtual service offer:
+
+- Fine-grained routing using headers, URIs, and query parameters. These are things that a regular Kubernetes service can not do, Kubernetes service does not offer layer 7 capabilities.
+- Manages traffic routing between different versions of a service, for example implement Canary releases(gradually introducing a new version of a service to a small percentage of Users to test before rolling it out to production), A/B Testing, and Blue/Green deployments(Switching traffic from an old version to a new version). The regular kubernetes service isn't able to do this.
+- Simulate faults in the application to test service resilience.
+- Configure retries and timeouts to improve reliability of an application.
+- Use advanced load balancing features that support strategies like round-robin, weighted routing, etc.
 
 - Translates a hostname to a kubernetes service, once it finds that match of the kubernetes service by default as long as there's no other policy applied to it, it will forward that request to the label that matches that kubernetes service which happens to be the Pod.
 
@@ -342,7 +418,19 @@ All of the calls that are being made between the services in the code is just a 
 
 **STRICT vs PERMISSIVE mTLS**
 I just want to look at an option we can set, this option is relevant if for any reason, you have traffic going from one Pod to another, but the sending Pod does not have a proxy enabled. When you have a Pod in a namespace that we have not set up the sidecar injection. The Pod is just a regular Kubernetes Pod with no Istio Proxy inside, but it's making a call, in the code it's just doing a regular HTTP call not HTTPS. But the receiving side does have a proxy enabled. This can't be upgraded to HTTPS because the sending side needs to present a certificate and if it doesn't have a certificate, it can't participate in a HTTPS call. Therefore, this cannot be automatically upgraded by Istio.
-The default is Istio uses what it calls permissive automatic TLS and the permissive means if it can't automatically upgrade the connection to TLS and the reason it can't will be if there isn't a proxy on the sending side, then the Istio default is to say, I can't upgrade the connection. So I will just leave it as a HTTP connection, and I will service it as normal. It won't upgrade the connection, but the call will succeed and it would have been an insecure call. Therefore, you might have accidentally on your project left yourself a vector of attack. If you're working on a complex cluster, you might not be confident that you've remembered to deploy Istio to every namespace and therefore you might not
+The default is Istio uses what it calls permissive automatic TLS and the permissive means if it can't automatically upgrade the connection to TLS and the reason it can't will be if there isn't a proxy on the sending side, then the Istio default is to say, I can't upgrade the connection. So I will just leave it as a HTTP connection, and I will service it as normal. It won't upgrade the connection, but the call will succeed and it would have been an insecure call. Therefore, you might have accidentally on your project left yourself a vector of attack. If you're working on a complex cluster, you might not be confident that you've remembered to deploy Istio to every namespace and therefore you might not be confident that you have definitely upgraded all of the connections to HTTPS and for that reason, there's a setting we can apply to the Istio mesh, and it's called **STRICT mutual TLS**.
+With strict mutual TLS, the rule is, if the connections can't be upgraded, and that would be because we have a bear unencrypted HTTP call coming from a client, which does not have a proxy. If that connection cannot be upgraded, then the connection will be rejected, and this would be a setting you could apply to your cluster to be sure that you haven't accidentally allowed some non TLS connections to arrive at your proxies.
+
+```bash
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+```
 
 ### Observability
 
@@ -350,8 +438,6 @@ The default is Istio uses what it calls permissive automatic TLS and the permiss
 - Istio aims to provide these metrics on these four Golden Signals, so you can discern how services are responding, if they are responding quickly enough, if they are returning the right HTTP status codes, if they are met with some latency, if there are failed requests in a given amount of time and that's all important for building the resiliency into our microservices.
 - Istio provides you the facility to capture logging, tracing information and even metrics around latency or failed requests or even a given amount of requests in a certain period of time. That data that you take is allowing you to decide how you best tune your environment, but it's also telling of failures, any sort of calling limitations that you're currently experiencing and even tells you about any errors that you might be seeing inside of your mesh configuration. It's a great mechanism to help you troubleshoot aspects of services in your mesh.
 - The idea is to make sure we can capture Telemetry somewhere and export it to a system or solution for further analysis and Istio captures that Telemetry for short-term storage, it's not meant for long term storage but there has to be a sync somewhere where all of this can be stored and then further analyzed down the line. It's normally a situation where you pair Istio with something like Prometheus and Grafana in addition to tools like Kali(visualizer of your traffic flow) and Jagger. Grafana gives you a health perspective of how your services and cluster nodes are performing much more form a standpoint of CPU and Memory, Prometheus takes that a little further and gives you more specifics around those details (Think of Prometheus and Grafana as performance related). This adheres to opeTelemetry standards. Jagger is one of those tools that's responsible for telling us how all of our services connect, so when I make a request it's not just one service that responds to it, if we have a bunch of 5 Pods chained together, in Jagger these five Pods will be a part of what we call a request flow, we have to know the sequence of that request flow and how these services are tied together. There's something called B3 header propagation or better known as X header ID, which is a unique ID that ties every single one of those hops together, so it stitches them together so we can visualize, another way to look at this is I am curling to get a response from Service A, Service A talks to Service B, Service B talks to Service C, Service C talks to Service D, before I get my response. Now that B3 header information or X header ID information is consistent between those four Services, signifying that they're tied together for this given request, we call this a Trace, within a Trace we have several spans, each of those hops is considered a Span. This information is very powerful to have if someone is trying to debug.
-
-### Service Mesh vs Ingress
 
 ### Istio Sidecar-less model called Ambient mesh
 
@@ -368,3 +454,55 @@ Main benefits of using Istio Ambient Mesh vs Traditional Istio Service Mesh:
 
 - It reduces number of proxies to manage.
 - Slashing cost by reducing the number of compute and memory requirements per node.
+
+# Upgrading Istio
+
+What you have to do if you have a production cluster running and Istio running at a particular version, and then you decide you want to upgrade Istio to a more recent version.
+The problem with upgrading is that Istio isn't a feature, it's not a single Pod. Istio is cutting across your entire infrastructure.
+We have the control plane in Istio which is just a single part, it's IstioD running inside its own namespace, that's not such a big deal. The big deal is that you have these sidecars running in every single one of your Pods. The danger is, in doing an upgrade, we're going to have to be switching things around, and in the process of doing so there's a very high chance that we might have downtime, that's the thing that we are worried about. If anything goes wrong during the rollout, and we want to undo the process and go back to where we were, then that could be an emergency procedure. And while you're doing it, it could be that your application is down and you get lots of angry users.
+
+**Canary Upgrade (Rolling Upgrades)**
+This is more of a staged release (I always think of a canary as being where you release a new feature to a small number of users or a small number of requests). Istio is not a feature, it's a major infrastructure components, and what we are really doing here is we're deploying two versions of the infrastructure an we're going to slowly switch from one to the other. That feels more like a rolling deployment or a staged deployment.
+
+```bash
+# Install an old version of Istio with a tag(use any name or number to state what the version is).
+istioctl install --set profile=demo --set revision=1-7
+
+kubectl get pods -n istio
+
+# Label the namespace where you want this particular Istio version.
+
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    istio.io/rev: 1-7 # The revision of Istio we are targeting
+  name: default
+EOF
+
+# Proxies inside these Pods in this labeled namespace are actually connected to the Istio daemon installed with a revision.
+
+istoctl proxy-status
+
+# Upgrading to a new version
+istioctl install --set profile=demo --set revision=1-8
+
+# A new IstioD will be started in the Istio system namespace.
+# The proxies in the labeled namespace are not going to connect because of the revision labels, The revision labels are effectively used as a filter to say which IstioD should the proxies connect to.
+
+# Update the revision label of the target namespace
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    istio.io/rev: 1-8 # The revision of Istio we are targeting
+  name: default
+EOF
+
+# Restart the Pods
+kubectl rollout restart deployment <name-of-deployment>
+
+# Restarted Pods gets new Proxies.
+```
