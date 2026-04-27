@@ -510,6 +510,12 @@ spec:
 ```
 
 ### Zero-Trust Architecture
+
+**Zero Trust:** Means "Never trust, always verify! Even Inside your own network".
+For example: do you trust this Identities, do you trust IP address, do you trust this Application, Data, Devices, Infrastructure etc.
+Istio Implements zero trust by enforcing mTLS for all communications 
+
+
 **mTLS (Mutual TLS)**
 
 - The concept of Authentication: normally when we have to authenticate to something we issue a username and password, that's the most common approach, but services that communicate amongst each other are not going to say take my username and password and verify that it's a legitimate username in your database. So the mechanism that is normally preferred is to use client certificates or more specifically transport layer certificates or even more specifically transport layer authentication and encryption, TLS is the short form of it. The simple idea is I'm going to make a request out to you but you have to verify to me that you're authentic and you're legitimate and you're who you say you're and if you are who you say you are then the transaction can go through fine, and that's what we call one way TLS. Now if I communicate with a server and the server comes back to me and says I also want to validate you to see who you are and you truly are who you say you are, once I validated that then we can have bidirectional communication. In Istio there's this concept called peer authentication which enables us to determine if we have sidecar resources that can authenticate to us. If they have a sidecar and a certificate issued and the policy says you're allowed to talk to each other then we can authenticate each other and our communication stream can go through but also that mTLS offers up encryption so the traffic(payloads) that's in motion between these two workloads is encrypted. i.e the traffic between workloads adheres to Mutual authentication and encryption - All we are really doing with this is solving the Identities and solving the payload encryption piece, but there's another piece of authorization(What services can do and what actions can they perform against other services. This ensures that RBAC is in effect).
@@ -548,9 +554,12 @@ spec:
     mode: STRICT
 ```
 
-** Istio Authorization Policies:** are resources that controls access to workloads using fine-grained policies
+** Istio Authorization Policies:** are resources that controls access to workloads using fine-grained policies.
+Once a service is authenticated using peerAuthentication mTLS, it may communicate with other services in the Istio service mesh, but authorization policies can be placed on top to define what you can and can't do.
+For example: an inventory service is able to do a post on the shoe service on Port 80, but can't do a get request on the users service on Port 80. 
 [Authorization Policy](https://istio.io/latest/docs/reference/config/security/authorization-policy/)
 
+Authorization policy has it's own resource
 ```bash
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -568,6 +577,8 @@ spec:
         methods: ["POST"]
 
 ```
+
+
 
 ### Observability
 
