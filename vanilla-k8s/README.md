@@ -332,3 +332,200 @@ Configuration for kubelet is located at /var/lib/kubelet/config.yaml
   - Check for the Kubeadm default configuration values:
     kubeadm config print init-defaults
     Gives you a list of all the default values kubeadm will initialize your cluster with.
+
+### Role-Based Access Control (RBAC)
+
+In Kubernetes, you need to be authenticated before you are allowed to make a request to an API resource.
+
+**RBAC**: defines policies for users, groups, and processes by allowing or disallowing access to manage API resources.
+
+**_RBAC consists of three key building blocks_**:
+**Subject**: The user or process that wants to access a resource
+**Resource**: The Kubernetes API resource type (e.g., a Deployment or node)
+**Verb**: The operation that can be executed on the resource (e.g., creating a Pod or deleting a Service)
+
+![RBAC building blocks](../assets/cka2_0602.png)
+
+**_Users and groups are not stored in etcd, the Kubernetes database, and are meant for processes running outside of the cluster. Service accounts exist as objects in Kubernetes and are used by processes running inside of the cluster._**
+
+**_Kubernetes does not represent a user as with an API resource. The user is meant to be managed by the administrator of a Kubernetes cluster, which then distributes the credentials of the account to the real person or to be used by an external process._**
+
+Calls to the API server with a user need to be authenticated. Kubernetes offers a variety of authentication methods for those API requests.
+
+| Authentication strategy  | Description                                                           |
+| ------------------------ | --------------------------------------------------------------------- |
+| X.509 client certificate | Uses an OpenSSL client certificate to authenticate                    |
+| Basic authentication     | Uses username and password to authenticate                            |
+| Bearer tokens            | Uses OpenID (a flavor of OAuth2) or webhooks as a way to authenticate |
+
+The following steps demonstrate the creation of a user that uses an OpenSSL client certificate to authenticate. Those actions have to be performed with the cluster-admin Role object.
+
+**Create user using x509 certificates**
+
+```bash
+# Log into the Kubernetes control plane node and create a temporary directory that will hold the generated keys. Navigate into the directory:
+mkdir cert && cd cert
+
+# 1. Create a private key using the openssl executable. Provide an expressive file name, such as <username>.key:
+ openssl genrsa -out dev-tom.key 2048
+
+# 2. Create a certificate sign request (CSR) in a file with the extension .csr. You need to provide the private key from the previous step. The -subj option provides the username (CN) and the group (O). The following command uses the username dev-tom and the group named cka-study-guide. To avoid assigning the user to a group, leave off the /O component of the assignment:
+openssl req -new -key dev-tom.key -subj "/CN=tom/O=cka-study-guide" -out dev-tom.csr
+
+# Lastly, sign the CSR with the Kubernetes cluster certificate authority (CA). The CA can usually be found in the directory /etc/kubernetes/pki and needs to contain the files ca.crt and ca.key. The following command signs the CSR and makes it valid for 364 days:
+
+openssl x509 -req -in dev-tom.csr -CA /etc/kubernetes/pki/ca.crt -CAkey \
+  /etc/kubernetes/pki/ca.key -CAcreateserial -out dev-tom.crt -days 364
+
+  # OR
+
+# 3. Send CSR using K8s Certificates API
+kubectl apply -f - <<EOF
+apiVersion: certificates.k8s.io/v1
+kind: CertificateSigningRequest
+metadata:
+  name: dev-tom
+spec:
+  request:
+LS0tLS1CRUdJTiBDRVJUSUZJQ0FURSBSRVFVRVNULS0tLS0KTUlJQ1V6Q0NBVHNDQVFBd0RqRU1NQW9HQTFVRUF3d0RkRzl0TUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQwpBUThBTUlJQkNnS0N
+BUUVBanQrY3g0YjYwK3QxcVZjcDRZVlEzTC9oTWJSNVdvRDFqdnk4M0EvdDlFMUJYMDcxCm9Fd1JIeVlVd2tmeUJBcFBiQm5BZlZEZjR3TGhYMDBXa2NtMXBiekp1S0EyM3IyTGFZUkxGR1MxTHk1VmpFNzAKKzhUO
+VVpenU1c2EvZzE4VlJ2SWlXaCtiZzR5SHovWitFNE11eUppMFJkdUVTSERGMkFZbzVISW0veUIrL2hOaQp4bEpJSHVOMFFLeENqVlZCTlRiM0hxZVZYMUg3TWFPektWdzQ5WTJYWGdqM1hYMGFESDY3Ny8rZFlud2l
+oYk1xClJzY1IyenZwbTlOL0RXQllNZWZDNWNOWnBKOGZIQ2RXMzlWc1NDNUkyNkliaVBnYy9SbnBpZjdoR1ZFQk5HT0YKa2lvazN0TGZ2cWRVZmhFdWpYQ2VNOEhocXAyL1JEYUxBekl6QVFJREFRQUJvQUF3RFFZS
+ktvWklodmNOQVFFTApCUUFEZ2dFQkFEc040K29uUjdrWkNyeFRQODUvY2VhMTFscXQ5NEF5WFlBR2R5c1VBcXJneW5DYVlSY0pvZWUyCjNiZGpBRGtwWUNJM1JMQ0VDM0pVWnVpUlN1ZUtDQVRjQ0FTdk1QZVBHYlZ
+IZTdhUCtlR1dzdndab0NQRnJPb3kKWDdtUDhpM2ZQaExZUnUzK0tPV2xNNGM1aThVQTFIVTZhTWJOT1A4b1hJS2t2bVZRaFBjTEtIMWxxZzlOOGZKeQpNUHFFMjFhbDM4L2JnMWQxbWxpUGZHYWVsQzdOdThELzFxW
+VFxWVh4VEZzWk1vamNZRUVyVnhPT2paZjM1OWdBCkdWdkF6UEQvVmtPVnYxLzBHb0VCVFdNUFRjd1hQTUVtcEZzRWdteVZldkNqVUJDWmdpS0VGcHVmR1hyMzRldUkKN25xWWozbHZVbDA1c3ZPbHVWYlUrS1l3czR
+DRWlwTT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUgUkVRVUVTVC0tLS0tCg==
+  signerName: kubernetes.io/kube-apiserver-client
+  expirationSeconds: 86400 # one day
+  usages:
+  - client auth
+
+EOF
+
+# 4. K8s signs certificates for you
+kubectl get certificatesigningrequests.certificates.k8s.io
+
+# 5. K8s admin approves certificate
+kubectl certificate approve dev-tom
+
+kubectl get csr dev-tom -o yaml
+
+echo 'LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUM4ekNDQWR1Z0F3SUJBZ0lRTEtiN2RtRkdiU2FFS3hzOUVUM1ZpakFOQmdrcWhraUc5dzBCQVFzRkFEQVYKTV
+JNd0VRWURWUVFERXdwcmRXSmxjbTVsZEdWek1CNFhEVEkwTURreU1qRTBOVEExTlZvWERUSTBNRGt5TXpFMApOVEExTlZvd0RqRU1NQW9HQTFVRUF4TURkRzl0TUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FR
+OEFNSUlCCkNnS0NBUUVBanQrY3g0YjYwK3QxcVZjcDRZVlEzTC9oTWJSNVdvRDFqdnk4M0EvdDlFMUJYMDcxb0V3Ukh5WVUKd2tmeUJBcFBiQm5BZlZEZjR3TGhYMDBXa2NtMXBiekp1S0EyM3IyTGFZUkxGR1MxTH
+k1VmpFNzArOFQ5VWl6dQo1c2EvZzE4VlJ2SWlXaCtiZzR5SHovWitFNE11eUppMFJkdUVTSERGMkFZbzVISW0veUIrL2hOaXhsSklIdU4wClFLeENqVlZCTlRiM0hxZVZYMUg3TWFPektWdzQ5WTJYWGdqM1hYMGFE
+SDY3Ny8rZFlud2loYk1xUnNjUjJ6dnAKbTlOL0RXQllNZWZDNWNOWnBKOGZIQ2RXMzlWc1NDNUkyNkliaVBnYy9SbnBpZjdoR1ZFQk5HT0ZraW9rM3RMZgp2cWRVZmhFdWpYQ2VNOEhocXAyL1JEYUxBekl6QVFJRE
+FRQUJvMFl3UkRBVEJnTlZIU1VFRERBS0JnZ3JCZ0VGCkJRY0RBakFNQmdOVkhSTUJBZjhFQWpBQU1COEdBMVVkSXdRWU1CYUFGS00xLzJQdGZxSGJQL2VTTU1jZlYzZGwKV2s1cE1BMEdDU3FHU0liM0RRRUJDd1VB
+QTRJQkFRQmRPcTAzOXIyQ1BuUERJUkg1ajZRZUhkVXVua2c1Uk1UYgp1NVNRR00zRno0NnVYV1haN3VyRXA1c0Z1NXNEQ3JHRHNqNGZOVGFCWGpzVVF1cjdBNndQY0pQYUtzUmVUNUhnCllIaEhtVjVBTWVEU3B4N2
+p2VHhLQU92Q1Q2WXBsQUd3cjFNc0hwQ0RSY2grNm5yNSt3Q09wc2pPSjFlNG5JSTcKZ0ZxZ21zODJtbGk3UytZa3F2NHpMeFJMRWg4aVVMRVFKR2pVSnhKWFpjb202RHNlU2JDeVFRd00yN1ZPeUVwNApvaUtPaHNT
+UkZoaDR6OVhCaWU5SkJ5MTdvVUJ2b2NicERTNVUyeFcxOXRZenhaVlVHZm1HcnYxRlhiVmZPaEFRClV2cnh5UlpoYnZydXl1WXJMb1UxUTVpdmxWTXFFOFlFdmJ1OTdBWWptZjByakM4UENwelcKLS0tLS1FTkQgQ0
+VSVElGSUNBVEUtLS0tLQo=' | base64 --decode > dev-tom.crt
+
+
+# 6. Create the user in Kubernetes by setting a user entry in kubeconfig for dev-tom. Point to the CRT and key file. Set a context entry in kubeconfig for dev-tom:
+kubectl config set-credentials dev-tom \
+  --client-certificate=dev-tom.crt --client-key=dev-tom.key
+
+kubectl config set-context dev-tom-context --cluster=<cluster-name> \
+  --user=dev-tom
+
+# To switch to the user, use the context named dev-tom-context. You can check the current context using the command config current-context:
+
+kubectl config use-context dev-tom-context
+
+kubectl config current-context
+```
+
+**ServiceAccount**
+
+A user represents a real person who commonly interacts with the Kubernetes cluster using the kubectl executable or the UI dashboard. Some service applications like Helm running inside of a Pod need to interact with the Kubernetes cluster by making requests to the API server via RESTful HTTP calls. For example, a Helm chart would define multiple Kubernetes objects required for a business application. Kubernetes uses a ServiceAccount to authenticate the Helm service process with the API server through an authentication token. This ServiceAccount can be assigned to a Pod and mapped to RBAC rules.
+
+A Kubernetes cluster already comes with a ServiceAccount, the default ServiceAccount that lives in the default namespace. Any Pod that doesn’t explicitly assign a ServiceAccount uses the default ServiceAccount.
+
+To create a custom ServiceAccount imperatively, run the create serviceaccount command:
+
+```bash
+
+# Imperative way to create a service account
+kubectl create serviceaccount build-bot
+
+# Declarative way to create a service account
+
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: build-bot
+EOF
+
+# Assigning a ServiceAccount to a Pod imperatively
+kubectl run build-observer --image=alpine --restart=Never \
+  --serviceaccount=build-bot
+
+# Alternatively, you can directly assign the ServiceAccount in the YAML manifest of a Pod, Deployment, Job, or CronJob using the field serviceAccountName.
+
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: build-observer
+spec:
+  serviceAccountName: build-bot
+...
+EOF
+```
+
+**Understanding RBAC API Primitives**
+[Kubernetes API Groups Documentation](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/)
+
+Kubernetes API primitives that implement the RBAC functionality:
+
+**Role**
+The Role API primitive declares the API resources and their operations this rule should operate on. For example, you may want to say “allow listing and deleting of Pods,” or you may express “allow watching the logs of Pods,” or even both with the same Role. Any operation that is not spelled out explicitly is disallowed as soon as it is bound to the subject.
+
+**RoleBinding**
+The RoleBinding API primitive binds the Role object to the subject(s). It is the glue for making the rules active. For example, you may want to say “bind the Role that permits updating Services to the user John Doe.”
+
+![RBAC API Primitives](../assets/cka2_0603.png)
+
+**Default User-Facing Roles**
+Kubernetes defines a set of default Roles. You can assign them to a subject via a RoleBinding or define your own, custom Roles depending on your needs.
+
+| Default ClusterRole | Description                                                                                                       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| cluster-admin       | Allows read and write access to resources across all namespaces.                                                  |
+| admin               | Allows read and write access to resources in namespace including Roles and RoleBindings.                          |
+| edit                | Allows read and write access to resources in namespace except Roles and RoleBindings. Provides access to Secrets. |
+| view                | Allows read-only access to resources in namespace except Roles, RoleBindings, and Secrets.                        |
+
+To define new Roles and RoleBindings, you will have to use a context that allows for creating or modifying them, that is, cluster-admin or admin.
+
+**Creating Roles**
+Roles can be created imperatively with the create role command. The most important options for the command are --verb for defining the verbs aka operations, and --resource for declaring a list of API resources. The following command creates a new Role for the resources Pod, Deployment, and Service with the verbs list, get, and watch:
+
+```bash
+kubectl create role read-only --verb=list,get,watch \
+  --resource=pods,deployments,services
+```
+
+**Creating RoleBindings**
+The imperative command creating a RoleBinding object is create rolebinding. To bind a Role to the RoleBinding, use the --role command-line option. The subject type can be assigned by declaring the options --user, --group, or --serviceaccount. The following command creates the RoleBinding with the name read-only-binding to the user called dev-tom:
+
+```bash
+kubectl create rolebinding read-only-binding --role=read-only --user=dev-tom
+```
+
+At any given time, you can check a user’s permissions with the auth can-i command. The command gives you the option to list all permissions or check a specific permission:
+
+```bash
+kubectl auth can-i --list --as dev-tom
+
+
+kubectl auth can-i list pods --as dev-tom
+```
+
+**Namespace-wide and Cluster-wide RBAC**
+Roles and RoleBindings apply to a particular namespace. You will have to specify the namespace at the time of creating both objects. Sometimes, a set of Roles and Rolebindings needs to apply to multiple namespaces or even the whole cluster. For a cluster-wide definition, Kubernetes offers the API resource types ClusterRole and ClusterRoleBinding. The configuration elements are effectively the same. The only difference is the value of the kind attribute:
+
+- To define a cluster-wide Role, use the imperative subcommand clusterrole or the kind ClusterRole in the YAML manifest.
+- To define a cluster-wide RoleBinding, use the imperative subcommand clusterrolebinding or the kind ClusterRoleBinding in the YAML manifest.
