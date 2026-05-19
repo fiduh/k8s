@@ -182,4 +182,250 @@ spec:
 
 ### Projects
 
+It's mandatory to use projects in ArgoCD. Projects provide a logical group of applications.
+
+- Access Restrictions: useful when ArgoCd is used by multiple teams.
+  - Allow only specific sources "trusted git repos".
+  - Allow apps to be deployed into specific clusters and namespaces.
+  - Allow specific resources to be deployed "Deployments, Statefulsets ..etc".
+
+Project Roles Feature
+
+- Enables you to create a role with set of policies "permissions" to grant access to a project's applications.
+
+ArgoCD creates a default project once you install it.
+
+```bash
+# Allow all sources (repos)
+# Allow all destinations
+# Allow all cluster and namespace scoped resources
+
+# Get the default argoCD project
+kubectl get appproject -n argocd
+
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+spec:
+  sourceRepos:
+  - '*'
+  sourceNamespaces: []
+  destinations:
+  - namespace: '*'
+    server: '*'
+  clusterResourceWhitelist:
+  - group: '*'
+    kind: '*'
+```
+
+**Private Git Repos**
+
+- Public repos can be used directly in application.
+- Private repos needs to be registered in argoCD with proper authentication before using it in application. ArgoCD support connecting to private repos using the following ways:
+  - HTTPs: using username and password or access token.
+  - SSH: using ssh private key.
+  - GitHub/GitHub Enterprise: GitHub App credentials.
+- Private repos credentials are stored in normal k8s secrets.
+- You can register repos using declarative approach, cli and web UI.
+
+```bash
+# Git Repo using HTTPs
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-private-repo
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  type: git
+  url: https://github.com/argoproj/private-repo
+  username: my-username
+  password: my-password
+---
+# Git Repo using SSH
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-private-repo
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  type: git
+  url: https://github.com/argoproj/private-repo
+  sshPrivateKey: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+
+    ....
+
+
+    -----END OPENSSH PRIVATE KEY-------
+```
+
+### Sync Policies and Options
+
+**Automated Sync**
+
+- By default ArgoCD pulls the Git repositories every 3 minutes to detect changes to the manifests.
+- ArgoCD can automatically sync apps when it detects differences between the desired manifests in Git, and the live state in the cluster. By doing that we don't need to do a manual sync.
+
+```bash
+# Enable automated sync using declarative approach with application manifest.
+
+spec:
+  syncPolicy:
+    automated: {}
+```
+
+**Automated Pruning**
+
+- By default - no prune: when automated sync is enabled, by default for safety automated sync will not delete resources when ArgoCD detects the resource is no longer defined in Git.
+
+```bash
+# This can be define declaratively in the application spec.syncPolicy.automated manifest.
+
+spec:
+  syncPolicy:
+    automated:
+      prune: true
+```
+
+**Automated Self Healing**
+
+- By default when you directly make changes to a live cluster resources, automated syn will not be triggered. For example if you use kubectl to scale your deployment replicas.
+- ArgoCD has a self healing feature to correct the cluster state if it deviates from the Git state.
+
+```bash
+# Enable Auto self heal declaratively in the application spec.synPolicy.automated.selfHeal
+
+spec:
+  syncPolicy:
+    automated:
+      selfHeal: true
+
+```
+
+**Sync options**
+
+- Users can customize how resources are synced between target cluster and desired state.
+- Most of the options available at application level. At the application level you can control these options under spec.syncPolicy.syncOptions.
+- At the resource level some of the options are available using resources annotations.
+
+```bash
+# Sync options at application level
+
+spec:
+  syncPolicy:
+    automated:
+      selfHeal: true
+
+# Sync Options at resource level
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false # ArgoCd will not prune the resource even if deleted in Git
+  name: guestbook-ui
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+
+```
+
+**Tracking Strategies**
+
+- ArgoCD provides several options to track manifests (sources) whether its in Git repos or Helm repos.
+- Git repos tracking:
+  - Commit SHA (good for production).
+  - Tags (good for production). Regarded as stable, not changed frequently.
+  - Branch tracking (ex: main branch). Good for local development or testing environments.
+  - Symbolic reference (HEAD).
+- Helm repo tracking: Helm always use semantic versioning. There are three options to track the changes of Helm Chart:
+  - Specific version v1.2
+  - Range 1.2.\* or >=1.2.0 <1.3.0.
+  - Latest \* or >=0.0.0
+
+```bash
+# Application manifest, Git source using Tag
+spec:
+  source:   #Source of manifests
+    path: guestbook
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: v1 # using tag name
+---
+# Application manifest, Git source using commit SHA
+spec:
+  source:   #Source of manifests
+    path: guestbook
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: 2455bb6 # using the short commit id or the full commit id
+
+---
+
+# Application manifest, Git source using branch
+spec:
+  source:   #Source of manifests
+    path: guestbook
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: main # using branch name
+---
+# Application manifest, Git source using Symbolic reference
+spec:
+  source:   #Source of manifests
+    path: guestbook
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: HEAD # using symbolic reference
+```
+
+**Diffing Customization**
+
+- ArgoCD allows you to optionally ignore differences of problematic resources/manifests.
+- Examples when you might need diffing customization:
+  - A controller or mutating webhook is altering the resources after it was submitted to kubernetes at runtime in a manner which contradicts Git.
+  - A Helm chart is using a template function such as randAlphaNum, which generates different data every time helm template is invoked.
+  - There is a bug in the manifest, where it contains extra/unknown fields from the actual K8s spec.
+- Diffing customization can be configured at the application level or at a system level.
+- ArgoCD allows ignoring differences using below options:
+  - RFC6902 JSON patches at a specific JSON path (json pointers)
+  - JQ path expressions.
+  - Ignore differences from fields owned by specific managers defined in metadata.managedFields.
+
+```bash
+# Application level - Json Pointers
+ignoreDifferences: # Will ignore differences between live and desired state during the diff.
+  - group: apps
+  kind: Deployment
+  jsonPointers: # this will ignore differences in spec.replicas for all deployments for this application.
+  - /spec/replicas
+
+---
+
+# Application level - Json Pointers - for specific resources
+ignoreDifferences:
+  - group: apps
+  kind: Deployment
+  name: guestbook
+  jsonPointers: # this will ignore differences in spec.replicas for deployment with name guestbook.
+  - /spec/replicas
+
+---
+# Application level - jq expressions
+ignoreDifferences:
+  - group: apps
+  kind: Deployment
+  jqPathExpressions: # Use JQ path expressions to identify list items based on item content.
+  - spec.template.spec.initContainers[] | select[.name -- "inject-init-container"]
+
+---
+# Application level - by specific managers
+ignoreDifferences:
+  - group: apps
+  kind: Deployment
+  managedFieldsManagers: # will ignore differences from all fields owned by kube-controller-manager for all resources belonging to this application
+  - kube-controller-manager
+```
+
 **MultiCluster Deployment**
