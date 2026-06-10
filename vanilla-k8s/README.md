@@ -1437,3 +1437,1053 @@ spec:
 ```
 
 ### Resource Requirements, Limits, and Quotas
+
+A workload executed in Pods will consume a certain amount of resources (e.g., CPU and memory). You should define resource requirements for those applications. On a container level, you can define a minimum amount of resources needed to run the application, as well as the maximum amount of resources the application is allowed to consume. Application developers should determine the right sizing with load tests or at runtime by monitoring the resource consumption.
+
+Kubernetes measures CPU resources in millicores (m), also called millicpu, and memory resources in bytes. That’s why you might see resources defined as 600 m or 100 Mi.
+
+- Configure Pod admission and scheduling (limits, node affinity, etc.)
+
+Kubernetes administrators can put measures in place to enforce the use of available resource capacity. There are two Kubernetes primitives in this realm: the ResourceQuota and the LimitRange.
+
+A LimitRange is a policy that constrains or defaults the resource allocations for a single object of a specific type (such as for a Pod or a PersistentVolumeClaim).
+
+**Working with Resource Requirements**
+It’s recommended practice that you specify resource requests and limits for every container. Determining those resource expectations is not always easy, specifically for applications that haven’t been exercised in a production environment yet. Load testing the application early during the development cycle can help with analyzing the resource needs. Further adjustments can be made by monitoring the application’s resource consumption after deploying it to the cluster.
+
+Quality of Service (QoS) classes in Kubernetes automatically categorize Pods into Guaranteed, Burstable, or BestEffort tiers based on their resource requests and limits, determining their eviction priority when nodes experience resource pressure. While understanding QoS is valuable for production workloads, it’s not explicitly covered in the CKA exam, which focuses more on practical resource management and Pod scheduling rather than the underlying eviction priorities.
+
+**Defining Container Resource Requests**
+One metric that comes into play for workload scheduling is the resource request defined by the containers in a Pod. Commonly used resources that can be specified are CPU and memory. The scheduler ensures that the node’s resource capacity can fulfill the resource requirements of the Pod. More specifically, the scheduler determines the sum of resource requests per resource type across all containers defined in the Pod and compares them with the node’s available resources.
+Each container in a Pod can define its own resource requests.
+
+```bash
+# Setting container resource requests
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rate-limiter
+spec:
+  containers:
+  - name: business-app
+    image: bmuschko/nodejs-business-app:1.0.0
+    ports:
+    - containerPort: 8080
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "1"
+  - name: ambassador
+    image: bmuschko/nodejs-ambassador:1.0.0
+    ports:
+    - containerPort: 8081
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "250m"
+```
+
+**Defining Container Resource Limits**
+Another metric you can set for a container is the resource limits. Resource limits ensure that the container cannot consume more than the allotted resource amounts. For example, you could express that the application running in the container should be constrained to 1,000 m of CPU and 512 Mi of memory.
+
+```bash
+# Setting container resource limits
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rate-limiter
+spec:
+  containers:
+  - name: business-app
+    image: bmuschko/nodejs-business-app:1.0.0
+    ports:
+    - containerPort: 8080
+    resources:
+      limits:
+        memory: "256Mi"
+  - name: ambassador
+    image: bmuschko/nodejs-ambassador:1.0.0
+    ports:
+    - containerPort: 8081
+    resources:
+      limits:
+        memory: "64Mi"
+```
+
+**Working with Resource Quotas**
+The Kubernetes primitive ResourceQuota establishes the usable maximum amount of resources per namespace. Once put in place, the Kubernetes scheduler will take care of enforcing those rules. The following list should give you an idea of the rules that can be defined:
+
+- Setting an upper limit for the number of objects that can be created for a specific type (e.g., a maximum of three Pods)
+- Limiting the total sum of compute resources (e.g., 3 Gi of RAM)
+- Expecting a Quality of Service (QoS) class for a Pod (e.g., BestEffort to indicate that the Pod must not make any memory or CPU limits or requests)
+
+```bash
+# Defining hard resource limits with a ResourceQuota
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: awesome-quota
+  namespace: team-awesome
+spec:
+  hard:
+    pods: 2
+    requests.cpu: "1"
+    requests.memory: 1024Mi
+    limits.cpu: "4"
+    limits.memory: 4096Mi
+```
+
+**Working with Limit Ranges**
+In the previous section, you learned how a resource quota can restrict the consumption of resources within a specific namespace in aggregate. For individual Pod objects, the resource quota cannot set any constraints. That’s where the limit range comes in. The enforcement of LimitRange rules happens during the admission control phase when processing an API request.
+
+The LimitRange is a Kubernetes primitive that constrains or defaults the resource allocations for specific object types:
+
+- Enforces minimum and maximum compute resource usage per Pod or container in a namespace
+- Enforces minimum and maximum storage request per PersistentVolumeClaim in a namespace
+- Enforces a ratio between request and limit for a resource in a namespace
+- Sets default requests/limits for compute resources in a namespace and automatically injects them into containers at runtime
+
+**Creating LimitRanges**
+
+```bash
+# A LimitRange defining multiple constraint criteria
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cpu-resource-constraint
+spec:
+  limits:
+  - type: Container   1
+    defaultRequest:   2
+      cpu: 200m
+    default:          3
+      cpu: 200m
+    min:              4
+      cpu: 100m
+    max:              4
+      cpu: "2"
+```
+
+### Pod Scheduling
+
+The scheduler is the cluster component responsible for deciding which node to select for running a Pod.
+
+**Pod Scheduling Algorithm**
+Initially a Pod created by an end user does not have a node assigned. That’s the job of the scheduler cluster component. The scheduler runs in a scheduling loop, watching for unscheduled Pods. It will then evaluate available nodes to choose the most suitable one for the Pod.
+
+**Pod Scheduling Options**
+The scheduler does a reasonably good job of assigning a Pod to a feasible node. Under certain conditions, you may want to restrict which node a Pod can run on, or define a preferred selection criteria. This is usually expressed by using label selection.
+
+- Node selector: A hard requirement to determine which node the Pod needs to run on
+- Node affinity and anti-affinity: A more flexible requirement for defining hard or soft requirements for node selection
+- Taints and tolerations: A way to safeguard specific nodes from scheduling Pods on them based on conditions and requirements
+- Pod topology spread constraints: Defines how to spread Pods across different topologies, i.e., regions and zones
+
+**Working with Node Selectors**
+The node selector defines a hard requirement for scheduling a Pod on specific nodes. To use the node selector, label one or many nodes with a specific label key-value pair. When defining a Pod in a YAML manifest, select the label from the Pod via the attribute spec.nodeSelector.
+
+```bash
+# Labeling a Node
+kubectl label node multi-node-m03 disk=ssd
+
+kubectl get nodes --show-labels
+
+# Assigning a Node Selector to a Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app
+spec:
+  nodeSelector:
+    disk: ssd
+  containers:
+  - name: nginx
+    image: nginx:1.27.1
+
+# The node selector is not limited to a single label key-value pair. Selecting a map of labels is completely valid.
+```
+
+**Working with Node Affinity and Anti-Affinity**
+For more flexible and expressive scheduling rules, you should use node affinity, defined under spec.affinity.nodeAffinity in the Pod specification. Node affinity allows you to match nodes using label selector expressions, enabling more complex criteria such as logical operators (In, NotIn, Exists, etc.) and prioritized preferences.
+
+Below image shows the node affinity concept in action. In this scenario, Pod 1 can be scheduled on Node 1 or Node 2 based on the defined set-based label selection.
+
+![Node affinity scenarios](/assets/cka2_1403.png)
+
+Node anti-affinity is useful in situations where you want to prevent Pods from being scheduled on specific nodes. This is particularly helpful in high-availability situations where you want to spread Pods across different zones or regions.
+
+**Assigning a Node Affinity to a Pod**
+In short, node affinity effectively replaces the node selector for most use cases, offering greater precision and control over workload placement.
+
+```bash
+# Assigning node affinity
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: disk
+          operator: In
+          values:
+          - ssd
+          - hdd
+  containers:
+  - name: nginx
+    image: nginx:1.27.1
+```
+
+**Node Affinity Types**
+Beyond supporting set-based expressions, node affinity also introduces specific types that control when the rules are applied. One commonly used type is requiredDuringSchedulingIgnoredDuringExecution. This setting means that the affinity rules are strictly enforced only at the time of scheduling—when the Pod is initially assigned to a node. Once the Pod is running, any changes to the node affinity rules are ignored and will not trigger rescheduling.
+
+Types starting with requiredDuringScheduling express a hard requirement, and types starting with preferredDuringScheduling express a soft requirement, a preference which the schedule doesn’t have to adhere to in case no fitting node can be determined.
+
+- requiredDuringSchedulingIgnoredDuringExecution: Rules that must be met for a Pod to be scheduled onto a node
+- preferredDuringSchedulingIgnoredDuringExecution: Rules that specify preferences that the scheduler
+
+**Node Affinity Operators**
+
+| Operator     | Behavior                                                                                                                                                      |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| In           | A node has an assigned label value in the given set of strings.                                                                                               |
+| NotIn        | Only those nodes are selected that do not have an assigned label value in the given set of strings.                                                           |
+| Exists       | A node has a label key assigned to it that matches the given string.                                                                                          |
+| DoesNotExist | A node does not have a label key assigned to it that matches the given string.                                                                                |
+| Gt           | Selects nodes where the label’s value is numerically greater than the specified value, like selecting nodes with more than 8 CPUs using “cpu-count Gt 8.”     |
+| Lt           | Selects nodes where the label’s value is numerically less than the specified value, like selecting nodes with less than 16 GB memory using “memory-gb Lt 16.” |
+
+There are two operators, NotIn and DoesNotExist, that negate the selective effects of their counterparts In and Exists. Those operators are used to define a node anti-affinity behavior.
+
+**Assigning a Node Anti-Affinity to a Pod**
+Node anti-affinity rules are typically used to prevent certain Pods from being scheduled on the same nodes, based on labels. An essential tool for defining anti-affinity behavior is the operator.
+uses the NotIn operator to repel Pods from a set of nodes with the given label values.
+
+```bash
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: disk
+            operator: NotIn                                1
+            values:
+            - ssd
+            - ebs
+  containers:
+  - name: nginx
+    image: nginx:1.27.1
+```
+
+In essence, node anti-affinity does not require you to learn a new API or new attributes when defining a Pod. Its usage primary boils down to the operator you select to define the node affinity rule.
+
+**Working with Taints and Tolerations**
+Similar to node anti-affinity, taints and tolerations represent another way in Kubernetes to influence where Pods can be scheduled, but they serve different purposes and work in fundamentally different ways. Node anti-affinity is meant to be used to spread or separate workload across nodes, whereas taints and tolerations are used for node isolation and workload protection.
+
+The main purpose of taints and tolerations is to prevent Pods from being scheduled on a node unless they explicitly tolerate that node’s taint. You’d add the taint to a node to say, “don’t schedule anything here unless it tolerates the taint.” Then in the Pod, you’d add a toleration if you want it to become schedulable on the tainted node.
+
+A typical use case for using taints and tolerations is the need to ensure that Pods are not scheduled on control plane nodes. Control plane nodes use the taint node-role.kubernetes.io/control-plane:NoSchedule to prevent Pods from being scheduled on them unless they provide a corresponding toleration.
+
+**Tainting a Node**
+A taint on a node marks it as unsuitable for certain Pods unless those Pods explicitly state they can tolerate it. A taint consists of three parts—key, value, and effect— formatted as key=value:effect. The key and value portions represent a simple, free-form key-value pair, similar to a label assignment. The effect describes the runtime treatment of the taint by the scheduler.
+
+Use the imperative kubectl taint command to add a taint to a node. The following command adds the taint special=true:NoSchedule to the node named multi-node-m02:
+
+```bash
+kubectl taint node multi-node-m02 special=true:NoSchedule
+
+#The scheduler now considers this taint during Pod placement.
+```
+
+**Taint Effects**
+
+- NoSchedule: Unless a Pod has matching toleration, it won’t be scheduled on the node.
+- PreferNoSchedule: Try not to place a Pod that does not tolerate the taint on the node, but it is not required.
+- NoExecute: Evict Pod from node if already running on it. No future scheduling on the node.
+
+**Assigning a Toleration to a Pod**
+To enable a Pod to run on a tainted node, you must add a toleration to the Pod specification that precisely matches the key, value, and effect of the node’s taint. This tells the scheduler that the Pod is allowed to tolerate the taint and may be placed on the node despite the restriction.
+
+```bash
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app
+spec:
+  tolerations:
+  - key: "special"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+  containers:
+  - name: nginx
+    image: nginx:1.27.1
+```
+
+**Working with Pod Topology Spread Constraints**
+Pod topology spread constraints control how Pods are distributed across your cluster to improve availability, resilience, and resource utilization. They define rules for how Pods of a certain group (typically in the same Deployment) should be spread across topology domains (like zones, nodes, or racks). You can define the Pod topology spread constraint in the Pod API with the attribute spec.topologySpread​Con⁠straints.
+
+**Assigning a Topology Spread Constraint to a Pod**
+Below shows an example for a Deployment YAML definition with six replicas of an app and ensures that they are evenly spread across availability zones.
+
+```bash
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: web
+      containers:
+      - name: nginx
+        image: nginx:1.27.1
+```
+
+### Storage
+
+This critical area ensures applications can reliably store and access data beyond the lifecycle of individual Pods.
+
+**Volumes**
+
+When container images are instantiated as containers, the container needs context—context to CPU, memory, and I/O resources. Pods provide the network and the filesystem context for the containers within. The network is provided as the Pod’s virtual IP address, and the filesystem is mounted to the hosting node’s filesystem.
+
+Applications running in the container can interact with the filesystem as part of the Pod context. A container’s temporary filesystem is isolated from any other container or Pod and is not persisted beyond a Pod restart.
+
+Essentially, a volume is a directory that’s shareable between multiple containers of a Pod.
+
+Different volume types and the process for defining and mounting a volume in a container.
+
+**Volume Types**
+Every volume needs to define a type. The type determines the medium that backs the volume and its runtime behavior.
+
+| Type                  | Description                                                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| emptyDir              | Empty directory in Pod with read/write access. Persisted only for the lifespan of a Pod. Good for caches or data exchange between containers in the same Pod. |
+| hostPath              | File or directory from the host node’s filesystem.                                                                                                            |
+| configMap / secret    | Inject configuration data into Pods. See Chapter 10 for examples.                                                                                             |
+| nfs                   | An existing Network File System (NFS) share. Preserves data after Pod restart.                                                                                |
+| persistentVolumeClaim | Claims a PersistentVolume for use by a Pod. See “Creating PersistentVolumeClaims”.                                                                            |
+
+**Creating and Accessing Volumes**
+Defining a volume for a Pod requires two steps. First, you need to declare the volume itself using the attribute spec.volumes[]. As part of the definition, you provide the name and the type. Just declaring the volume won’t be sufficient, though. Second, the volume also needs to be mounted to a path of the consuming container via spec.​con⁠tainers[].volumeMounts[]. The mapping between the volume and the volume mount occurs by the matching name.
+
+```bash
+# A Pod defining and mounting a volume
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: business-app
+spec:
+  volumes:
+  - name: shared-data
+    emptyDir: {}
+  containers:
+  - name: nginx
+    image: nginx:1.27.1
+    volumeMounts:
+    - name: shared-data
+      mountPath: /usr/share/nginx/html
+  - name: sidecar
+    image: busybox:1.37.0
+    volumeMounts:
+    - name: shared-data
+      mountPath: /data
+
+# Specifies a volume of type emptyDir. The curly braces mean that we don’t want to provide additional configuration, e.g., a size limit.
+```
+
+**Read-Only Volume Mounts**
+Some data is only meant for consumption, for example, configuration data provided through a volume. You can mark a volume mount to be read-only. Kubernetes will prevent any write operation on that volume mount. It’s important to understand that other containers may use the same volume in read/write mode.
+
+To make a volume mount read-only, assign the value true to the attribute spec.​con⁠tainers[].volumeMounts[].readOnly
+
+```bash
+# A mount path marked as read-only
+apiVersion: v1
+kind: Pod
+metadata:
+  name: business-app
+spec:
+  volumes:
+  - name: shared-data
+    emptyDir: {}
+  containers:
+  - name: nginx
+    image: nginx:1.27.1
+    volumeMounts:
+    - name: shared-data
+      mountPath: /usr/share/nginx/html
+      readOnly: true
+
+# Prevents write operations for this mount path
+```
+
+### Persistent Volumes
+
+Persistent volumes are a specific category of the wider concept of volumes with the capability of persisting data beyond a Pod lifecycle. The mechanics for persistent volumes are slightly more complex. The persistent volume is the resource that actually persists the data to an underlying physical storage.
+
+The persistent volume claim represents the connecting resource between a Pod and a persistent volume responsible for requesting the storage.
+
+Finally, the Pod needs to claim the persistent volume and mount it to a directory path available to the containers running inside of the Pod.
+
+- Implement storage classes and dynamic volume provisioning
+- Configure volume types, access modes, and reclaim policies
+- Manage persistent volumes and persistent volume claims
+
+![Claiming a persistent volume from a Pod](/assets/cka2_1601.png)
+
+**Working with Persistent Volumes**
+Data stored on volumes outlive a container restart. In many applications, the data lives far beyond the lifecycles of the applications, container, Pod, nodes, and even the clusters themselves. Data persistence ensures the lifecycles of the data are decoupled from the lifecycles of the cluster resources. A typical example would be data persisted by a database. That’s the responsibility of a persistent volume. Kubernetes models persist data with the help of two primitives: the PersistentVolume and the PersistentVolumeClaim.
+
+The PersistentVolume is the primitive representing a piece of storage in a Kubernetes cluster. It is completely decoupled from the Pod and therefore has its own lifecycle. The object captures the source of the storage (e.g., storage made available by a cloud provider). A PersistentVolume is either provided by a Kubernetes administrator or assigned dynamically by mapping to a storage class.
+
+The PersistentVolumeClaim requests the resources of a PersistentVolume—for example, the size of the storage and the access type. In the Pod, you will use the type persistentVolumeClaim to mount the abstracted PersistentVolume by using the PersistentVolumeClaim.
+
+**Volume Types**
+Kubernetes supports several types of persistent volumes to accommodate different storage backends and use cases. Each type has its own characteristics and is suitable for specific scenarios.
+
+| Volume Type | Description                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| hostPath    | Mounts a file or directory from the host node’s filesystem into the Pod. Useful for development and testing but not recommended for production multi-node clusters, as it ties the Pod to a specific node.      |
+| local       | Represents a mounted local storage device such as a disk, partition, or directory. Provides better performance than remote storage but requires node affinity to ensure Pods are scheduled on the correct node. |
+| nfs         | Allows multiple Pods to share the same Network File System (NFS) mount. Supports ReadWriteMany access mode and is useful for sharing data between Pods across nodes.                                            |
+| csi         | Container Storage Interface (CSI) driver that provides a standardized way to expose storage systems to containerized workloads. Most modern storage solutions use CSI drivers.                                  |
+| fc          | Fibre Channel (FC) volume that allows existing FC storage to be attached to Pods. Requires FC hardware and proper configuration on nodes.                                                                       |
+| iscsi       | Internet Small Computer Systems Interface (iSCSI) volume that allows existing iSCSI storage to be mounted to Pods. Provides block-level storage over IP networks.                                               |
+
+The choice of volume type depends on your infrastructure, performance requirements, and whether you need the storage to be shared across multiple Pods or nodes. For cloud environments, CSI drivers are typically provided by cloud providers (like AWS EBS CSI driver, GCE Persistent Disk CSI driver, or Azure Disk CSI driver) to integrate with their native storage services.
+
+**Static Versus Dynamic Provisioning**
+A PersistentVolume can be created statically or dynamically. If you go with the static approach, then you first need to create a storage device and then reference it by explicitly creating an object of kind PersistentVolume. The dynamic approach doesn’t require you to create a PersistentVolume object. It will be automatically created from the PersistentVolumeClaim by setting a storage class name using the attribute spec.storageClassName.
+
+A storage class is an abstraction concept that defines a class of storage device (e.g., storage with slow or fast performance) used for different application types. It’s the job of a Kubernetes administrator to set up storage classes.
+
+**Creating PersistentVolumes**
+When you create a PersistentVolume object yourself, we refer to the approach as static provisioning. A PersistentVolume can be created only by using the manifest-first approach. At this time, kubectl doesn’t allow the creation of a PersistentVolume using the create command. Every PersistentVolume needs to define the storage capacity using spec.capacity and an access mode set via spec.accessModes.
+
+Example below creates a PersistentVolume named db-pv with a storage capacity of 1 Gi and read/write access by a single node. The attribute hostPath mounts the directory /data/db from the host node’s filesystem.
+
+```bash
+#YAML manifest defining a PersistentVolume
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: db-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /data/db
+```
+
+**Configuration Options for a PersistentVolume**
+A PersistentVolume offers a variety of configuration options that determine its innate runtime behavior. For the exam, it’s important to understand the volume mode, access mode, reclaim policy, and node affinity configuration options.
+
+**Volume Mode**
+The volume mode handles the type of device. That’s a device either meant to be consumed from the filesystem or backed by a block device. The most common case is a filesystem device. You can set the volume mode using the attribute spec.volumeMode
+
+- Filesystem: Default. Mounts the volume into a directory of the consuming Pod. Creates a filesystem first if the volume is backed by a block device and the device is empty.
+- Block: Used for a volume as a raw block device without a filesystem on it.
+
+**Access Mode**
+Each PersistentVolume can express how it can be accessed using the attribute spec.accessModes. For example, you can define that the volume can be mounted only by a single Pod in a read or write mode or that a volume is read-only but accessible from different nodes simultaneously.
+
+| Type             | Short form | Description                               |
+| ---------------- | ---------- | ----------------------------------------- |
+| ReadWriteOnce    | RWO        | Read/write access by a single node        |
+| ReadOnlyMany     | ROX        | Read-only access by many nodes            |
+| ReadWriteMany    | RWX        | Read/write access by many nodes           |
+| ReadWriteOncePod | RWOP       | Read/write access mounted by a single Pod |
+
+The following command parses the access modes from the PersistentVolume named db-pv. As you can see, the returned value is an array underlining the fact that you can assign multiple access modes at once:
+
+```bash
+kubectl get pv db-pv -o jsonpath='{.spec.accessModes}'
+```
+
+ReadWriteOnce (RWO) allows mounting by a single node as read-write, ideal for databases like MySQL or PostgreSQL and stateful applications using block storage (AWS EBS, GCE Persistent Disk). ReadOnlyMany (ROX) enables multiple nodes to mount read-only simultaneously, perfect for serving static web content or shared configuration files across multiple Pods. ReadWriteMany (RWX) permits concurrent read-write access from multiple nodes, requiring file-based storage like NFS or AWS EFS, is essential for shared upload directories or content management systems where multiple Pods process the same files. ReadWriteOncePod (RWOP) ensures only one Pod cluster-wide can mount the volume, providing stronger guarantees than RWO for applications like etcd or during StatefulSet migrations where absolute single-writer semantics are critical. Storage provider support varies: block storage typically supports RWO/RWOP while file systems are needed for ROX/RWX.
+
+**Reclaim Policy**
+Optionally, you can also define a reclaim policy for a PersistentVolume. The reclaim policy specifies what should happen to a PersistentVolume object when the bound PersistentVolumeClaim is deleted.
+For dynamically created PersistentVolumes, the reclaim policy can be set via the attribute .reclaimPolicy in the storage class. For statically created PersistentVolumes, use the attribute spec.​per⁠sistentVolumeReclaimPolicy in the PersistentVolume definition.
+
+| Type    | Description                                                                                                        |
+| ------- | ------------------------------------------------------------------------------------------------------------------ |
+| Retain  | Default. When PersistentVolumeClaim is deleted, the PersistentVolume is “released” and must be manually reclaimed. |
+| Delete  | Deletion removes PersistentVolume and its associated storage.                                                      |
+| Recycle | This value is deprecated. You should use one of the other values.                                                  |
+
+This command retrieves the assigned reclaim policy of the PersistentVolume named db-pv:
+
+```bash
+kubectl get pv db-pv -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'
+```
+
+**Node Affinity**
+Node affinity allows you to constrain which nodes a PersistentVolume can be accessed from. This is particularly important for local storage types like local and hostPath volumes, which are physically tied to specific nodes. By defining node affinity rules, you ensure that Pods using the PersistentVolume are scheduled only on nodes that can actually access the underlying storage.
+
+The node affinity is specified using the spec.nodeAffinity field in the PersistentVolume definition. It uses the same syntax as Pod node affinity, with required rules that must be satisfied for the volume to be accessible.
+
+```bash
+# Defining node affinity for a PersistentVolume
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: local-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /mnt/data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - node01
+          - node02
+```
+
+When a PersistentVolumeClaim binds to a PersistentVolume with node affinity, any Pod using that claim will be scheduled according to these constraints. If no suitable node is available, the Pod will remain in Pending status.
+
+Important considerations:
+
+- Node affinity is required for local volume types.
+- The scheduler considers both the Pod’s node selectors and the PersistentVolume’s node affinity.
+- Changes to node labels after binding don’t affect existing mounted volumes.
+- For high availability, avoid overly restrictive node affinity rules.
+
+**Creating PersistentVolumeClaims**
+Its purpose is to bind the PersistentVolume to the Pod.
+
+```bash
+# Definition of a PersistentVolumeClaim
+
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 256Mi
+```
+
+What that’s saying is: “Give me a PersistentVolume that can fulfill the resource request of 256 Mi and provides the access mode ReadWriteOnce.”
+
+Static provisioning should use an empty string for the attribute spec.storageClassName if you do not want it to automatically assign the default storage class. The binding to an appropriate PersistentVolume happens automatically based on those criteria.
+
+**Binding by Volume Name**
+When creating a PersistentVolumeClaim, you can optionally specify the exact PersistentVolume you want to bind to using the spec.volumeName attribute. This creates a direct binding between the PersistentVolumeClaim and a specific PersistentVolume, bypassing the normal matching algorithm that considers storage size, access modes, and storage class.
+
+```bash
+#Binding a PersistentVolume to a PersistentVolumeClaim by name
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: specific-pvc
+spec:
+  volumeName: db-pv
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+```
+
+**Mounting PersistentVolumeClaims in a Pod**
+All that’s left is to mount the PersistentVolumeClaim in the Pod that wants to consume it.
+Use spec.volumes[].persistentVolumeClaim and provide the name of the PersistentVolumeClaim.
+
+```bash
+# A Pod referencing a PersistentVolumeClaim
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-consuming-pvc
+spec:
+  volumes:
+  - name: app-storage
+    persistentVolumeClaim:
+      claimName: db-pvc
+  containers:
+  - image: alpine:3.22.2
+    name: app
+    command: ["/bin/sh"]
+    args: ["-c", "while true; do sleep 60; done;"]
+    volumeMounts:
+      - mountPath: "/mnt/data"
+        name: app-storage
+```
+
+**Storage Classes**
+A StorageClass is a Kubernetes primitive that defines a specific type or “class” of storage. One typical storage characteristic is the type (e.g., fast SSD storage versus remote cloud storage or the backup policy for storage). The storage class is used to provision a PersistentVolume dynamically based on its criteria.
+
+In practice, this means that you do not have to create the PersistentVolume object yourself. The provisioner assigned to the storage class takes care of it. Most Kubernetes cloud providers come with a list of existing provisioners.
+
+**Creating Storage Classes**
+Storage classes can be created declaratively only with the help of a YAML manifest. At a minimum, you need to declare the provisioner. All other attributes are optional and use default values if not provided upon creation. Most provisioners let you set parameters specific to the storage type.
+
+The example below defines a storage class on Google Compute Engine denoted by the provisioner kubernetes.io/gce-pd.
+
+```bash
+# Definition of a storage class
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-ssd
+  replication-type: regional-pd
+
+# The storage class can be listed using the get storageclass command
+kubectl get storageclass
+```
+
+**Using Storage Classes**
+Provisioning a PersistentVolume dynamically requires assigning of the storage class when you create the PersistentVolumeClaim.
+
+```bash
+#Using a storage class in a PersistentVolumeClaim
+
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 512Mi
+  storageClassName: standard
+
+```
+
+### Servicing and Networking
+
+The domain Servicing and Networking covers the Kubernetes primitives important for establishing and restricting communication between microservices running in the cluster, or outside consumers. More specifically, this domain covers the primitives Services and Ingresses, as well as network policies.
+
+### Services
+
+In “Using a Pod’s IP Address for Network Communication”, we learned that you can communicate with a Pod by its IP address. A restart of a Pod will automatically assign a new virtual ClusterIP address. Therefore, other parts of your system cannot rely on the Pod’s IP address if they need to talk to one another.
+
+Building a microservices architecture, where each of the components runs in its own Pod with the need to communicate with each other through a stable network interface, requires a different primitive, the Service.
+
+The Service implements an abstraction layer on top of Pods, assigning a fixed virtual IP fronting all the Pods with matching labels, and that virtual IP is called ClusterIP.
+
+**Working with Services**
+In a nutshell, Services provide discoverable names and load balancing to a set of Pods. The Service remains agnostic from IP addresses with the help of the Kubernetes DNS control-plane component.
+
+Similar to a Deployment, the Service determines the Pods it works on with the help of label selection.
+
+![Service traffic routing based on label selection](/assets/cka2_1701.png)
+
+**_Services and Deployments_**
+Services are a complementary concept to Deployments. Services route network traffic to a set of Pods, and Deployments delegate to a ReplicaSet to manage a set of Pods, the replicas. While you can use both concepts in isolation, it is recommended to use Deployments and Services together. The primary reason is the ability to scale the number of replicas and at the same time be able to expose an endpoint to funnel network traffic to those Pods.
+
+**Service Types**
+Every Service defines a type. The type is responsible for exposing the Service inside and/or outside of the cluster.
+
+| Type         | Description                                                                                                                                                                         |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ClusterIP    | Exposes the Service on a cluster-internal IP. Reachable only from within the cluster. Kubernetes uses a round-robin algorithm to distribute traffic evenly among the targeted Pods. |
+| NodePort     | Exposes the Service on each node’s IP address at a static port. Accessible from outside of the cluster. The Service type does not provide any load balancing across multiple nodes. |
+| LoadBalancer | Exposes the Service externally using a cloud provider’s load balancer.                                                                                                              |
+
+Other Service types, e.g., ExternalName or the headless Service, can be defined.
+
+**Service type inheritance**
+The Service types just mentioned, ClusterIP, NodePort, and LoadBalancer, make a Service accessible with different scopes of exposure. It’s imperative to understand that those Service types also build on top of each other.
+
+![Network accessibility characteristics for Service types](/assets/cka2_1702.png)
+
+For example, creating a Service of type NodePort means that the Service will bear the network accessibility characteristics of a ClusterIP Service type as well. In turn, a NodePort Service is accessible from within and from outside of the cluster.
+
+**When to use which Service type?**
+When building a microservices architecture, the question arises of which Service type to choose to implement certain use cases.
+
+The ClusterIP Service type is suitable for use cases that call for exposing a microservice to other Pods within the cluster. Say you have a frontend microservice that needs to connect to one or many backend microservices. To properly implement the scenario, you’d stand up a ClusterIP Service that routes traffic to the backend Pods. The frontend Pods would then talk to that Service.
+
+The NodePort Service type is often mentioned as a way to expose an application to consumers external to the cluster. Consumers will have to know the node’s IP address and the statically assigned port to connect to the Service. That’s problematic for multiple reasons. First, the node port is usually allocated dynamically. Therefore, you won’t typically know it in advance. Second, providing the node’s IP address will funnel the network traffic only through a single node so you will not have load balancing at your disposal. Finally, by opening a publicly available node port, you are at risk of increasing the attack surface of your cluster. For all these reasons, a NodePort Service is primarily used for development or testing purposes, and less so in production environments.
+
+The LoadBalancer Service type makes the application available to outside consumers through an external IP address provided by an external load balancer. Network traffic will be distributed across multiple nodes in the cluster. This solution works great for production environments, but keep in mind that every provisioned load balancer will accrue costs and can lead to an expensive infrastructure bill. A more cost-effective solution is the use of an Ingress.
+
+**Creating Services**
+You can create Services in a variety of ways, some of which are more appropriate for the exam as they provide a fast turnaround. Let’s discuss the imperative approach first.
+
+A Service needs to select a Pod with a matching label. The Pod created by the following run command is called echoserver, which exposes the application on the container port 8080. Internally, it automatically assigns the label key-value pair run=echoserver to the object:
+
+```bash
+kubectl run echoserver --image=k8s.gcr.io/echoserver:1.10 --restart=Never \
+  --port=8080
+
+```
+
+You can create a Service object using the create service command. Make sure to provide the Service type as a mandatory argument. Here we are using the type clusterip. The command-line option --tcp specifies the port mapping. Port 80 exposes the Service to incoming network traffic. Port 8080 targets the container port exposed by the Pod:
+
+```bash
+kubectl create service clusterip echoserver --tcp=80:8080
+
+# An even faster workflow of creating a Pod and Service together can be achieved with a run command and the --expose option.
+kubectl run echoserver --image=k8s.gcr.io/echoserver:1.10 --restart=Never \
+  --port=8080 --expose
+```
+
+It’s actually more common to use a Deployment and Service that work together. The following set of commands creates a Deployment with five replicas and then uses the expose deployment command to instantiate the Service object. The port mapping can be provided with the options --port and --target-port:
+
+```bash
+kubectl create deployment echoserver --image=hashicorp/http-echo:1.0.0 \
+  --replicas=5
+
+kubectl expose deployment echoserver --port=80 --target-port=8080
+```
+
+An endpoint is a resolvable network endpoint, which serves as the virtual IP address and container port of a Pod. If a Service does not render any endpoints, then you are likely dealing with a misconfiguration. Use the EndpointSlice API to interact with the endpoints.
+
+EndpointSlice is Kubernetes’ scalable service discovery mechanism that maps Services to their backing Pod network endpoints. Instead of storing all endpoints in a single object like the deprecated Endpoints API, EndpointSlice distributes this information across multiple smaller objects, with each slice containing up to 100 endpoints by default. The following command lists the endpoints for the Service named echoserver with the assigned label app=echoserver:
+
+```bash
+kubectl get endpointslices -l app=echoserver
+```
+
+**Discovering the Service by DNS lookup**
+Kubernetes registers every Service by its name with the help of its DNS service named CoreDNS. Internally, CoreDNS will store the Service name as a hostname and maps it to the ClusterIP address. Accessing a Service by its DNS name instead of an IP address is much more convenient and expressive when building microservice architectures because IP addresses are ephemeral and unpredictable, whereas the labels are declarative and known.
+
+The full hostname for a Service is echoserver.default.svc.cluster.local. The string svc describes the type of resource we are communicating with. CoreDNS uses the default value cluster.local as a domain name (which is configurable if you want to change it). You do not have to spell out the full hostname when communicating with a Service.
+
+### Ingresses
+
+Once there’s a need to expose the application to external consumers, selecting an appropriate Service type becomes crucial. The most practical choice often involves creating a Service of type LoadBalancer. Such a Service offers load balancing capabilities by assigning an external IP address accessible to consumers outside the Kubernetes cluster.
+
+However, opting for a LoadBalancer Service for each externally reachable application has drawbacks. In a cloud provider environment, each Service triggers the provisioning of an external load balancer, resulting in increased costs. Additionally, managing a collection of LoadBalancer Service objects can lead to administrative challenges, as a new object must be established for each externally accessible microservice.
+
+To mitigate these issues, the Ingress primitive comes into play, offering a singular, load-balanced entry point to an application stack. An Ingress possesses the ability to route external HTTP(S) requests to one or more Services within the cluster based on an optional, DNS-resolvable host name and URL context path.
+
+- Know how to use Ingress controllers and Ingress resources
+
+**Working with Ingresses**
+The Ingress exposes HTTP (and optionally HTTPS) routes to clients outside of the cluster through an externally-reachable URL. The routing rules configured with the Ingress determine how the traffic should be routed. Cloud provider Kubernetes environments will often deploy an external load balancer. The Ingress receives a public IP address from the load balancer. You can configure rules for routing traffic to multiple Services based on specific URL context paths
+
+![Managing external access to the Services via HTTP(S)](/assets/cka2_1801.png)
+
+The scenario depicted above instantiates an Ingress as the sole entry point for HTTP(S) calls to the domain name next.example.com. Based on the provided URL context, the Ingress directs the traffic to either of the fictional Services: one designed for a business application and the other for fetching metrics related to the application.
+
+Specifically, the URL context path /app is routed to the App Service responsible for managing the business application. Conversely, sending a request to the URL context /metrics results in the call being forwarded to the Metrics Service, which is capable of returning relevant metrics.
+
+**Installing an Ingress Controller**
+For Ingress to function, an Ingress controller is essential. This controller assesses the set of rules outlined by an Ingress, dictating the routing of traffic. The choice of Ingress controller often depends on the specific use cases, requirements, and preferences of the Kubernetes cluster administrator. Noteworthy examples of production-grade Ingress controllers include the F5 NGINX Ingress Controller or the AKS Application Gateway Ingress Controller.
+
+**Deploying Multiple Ingress Controllers**
+Certainly, deploying multiple Ingress controllers within a single cluster is a feasible option, especially if a cloud provider has preconfigured an Ingress controller in the Kubernetes cluster. The Ingress API introduces the attribute spec.ingressClassName to facilitate the selection of a specific controller implementation by name.
+
+Kubernetes determines the default Ingress class by scanning for the annotation ingressclass.kubernetes.io/is-default-class: "true" within all Ingress class objects. In scenarios where Ingress objects do not explicitly specify an Ingress class using the attribute spec.ingressClassName, they automatically default to the Ingress class marked as the default through this annotation. This mechanism provides flexibility in managing Ingress classes and allows for a default behavior when no specific class is specified in individual Ingress objects.
+
+**Configuring Ingress Rules**
+When creating an Ingress, you have the flexibility to define one or multiple rules. Each rule encompasses the specification of an optional host, a set of URL context paths, and the backend responsible for routing the incoming traffic. This structure allows for fine-grained control over how external HTTP(S) requests are directed within the Kubernetes cluster, catering to different services based on specified conditions.
+
+An Ingress controller can optionally define a default backend that is used as a fallback route should none of the configured Ingress rules match.
+
+**Creating Ingresses**
+You can create an Ingress with the imperative create ingress command. The main command-line option you need to provide is --rule, which defines the rules in a comma-separated fashion. The notation for each key-value pair is <host>/<path>=<service>:<port>. Let’s create an Ingress object with two rules:
+
+```bash
+kubectl create ingress next-app \
+  --rule="next.example.com/app=app-service:8080" \
+  --rule="next.example.com/metrics=metrics-service:9090"
+
+# If you look at the output of the create ingress --help command, more fine-grained rules can be specified.
+```
+
+Port 80 for HTTP traffic is implied, as we didn’t specify a reference to a TLS Secret object. If you have specified tls=mysecret in the rule definition, then the port 443 would be listed here as well.
+
+### Gateway API
+
+The Gateway API was introduced to standardize and build upon the lessons learned from Ingress and service mesh frameworks like Istio, Contour, and Linkerd, which had demonstrated the need for more sophisticated traffic management capabilities beyond what Ingress could provide. As a more expressive and extensible alternative to the traditional Ingress resource, the Gateway API offers role-oriented design, support for multiple protocols beyond HTTP/HTTPS, and enhanced traffic-routing features.
+
+The Gateway API is the successor of the Ingress primitive and is becoming increasingly important as organizations adopt this modern approach to managing external traffic.
+
+- Use the Gateway API to manage Ingress traffic
+
+**Why Is the Ingress Primitive Not Sufficient?**
+The Ingress API is the standard Kubernetes way to configure external HTTP/HTTPS load balancing for Services, but it has limitations. While the Ingress supports TLS termination and simple content-based request routing of HTTP traffic, real-world use cases call for more advanced features. Enhancing the existing Ingress API model of the Ingress wouldn’t allow for adding those features easily for a variety of reasons:
+
+- Ingress controller-specific extensibility: Advanced features like traffic splitting, rate limiting, and request/response manipulation are provided by nonportable annotations for specific Ingress implementations.
+- Insufficient permission model: The Ingress API is not well suited for multitenant environments that call for a strong permission model.
+
+**Working with the Gateway API**
+You can think of the Gateway API as a unified and standardized API for managing traffic into and out of a Kubernetes cluster instead of having to choose from individual Ingress implementations. Product-specific annotations are not needed anymore to configure routing options. The Gateway API offers a flexible way to incorporate similar features. Effectively, the Gateway API is a universal specification supported by a wide range of different implementations.
+
+Instead of handling one single primitive like the Ingress, the Gateway API splits up responsibilities into multiple primitives.
+
+**Gateway API Resources**
+The Gateway API introduces a layered approach to traffic management through four primary resource types that work together to handle incoming traffic:
+
+- Gateway: Defines an instance of traffic-handling infrastructure, such as a cloud load balancer.
+- GatewayClass: Each Gateway is associated with a GatewayClass, which describes the actual kind of gateway controller that will handle traffic for the Gateway.
+- HTTPRoute/GRPCRoute: Defines HTTP- or GRPC-specific rules for mapping traffic from a Gateway listener to a representation of backend network endpoints. These endpoints are often represented as a Service.
+- ReferenceGrant: Can be used to enable cross-namespace references within the Gateway API, e.g., routes may forward traffic to backends in other namespaces.
+
+Managing those Gateway API resources falls within the responsibility of different personas.
+
+The GatewayClass is provided by platform providers, e.g., the cloud provider. The Gateway and ReferenceGrant are installed by the Kubernetes cluster administrator. Lastly, the HTTPRoute and GRPCRoute are created by application developers.
+
+**Installing the Gateway API CRDs**
+At the time of writing, the Gateway API resources do not ship with the standard set of Kubernetes API resources. You will have to install the Gateway API in the form of Custom Resource Definitions. The following command installs version 1.3.0 of the CRDs:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/\
+download/v1.3.0/standard-install.yaml
+
+# You will now be able to list the CRDs by searching for the API group used by the Gateway API resources:
+kubectl get crds | grep gateway.networking.k8s.io
+```
+
+**Deploying a Gateway Controller**
+The Gateway API requires a controller implementation to function. Different controllers offer various features and performance characteristics. For this example, we’ll use the Envoy Gateway implementation installed by Helm:
+
+```bash
+helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.4.2 \
+  -n envoy-gateway-system --create-namespace
+```
+
+**Creating GatewayClasses**
+Depending on the Kubernetes environment you are operating in, you may or may not have to create a GatewayClass. Cloud provider Kubernetes clusters should already come with one.
+
+In case you want to create your own GatewayClass, you will first have to determine the Gateway controller name. The controller name depends on the controller implementation installed. You can usually look up the controller name in its documentation.
+
+The controller name for Envoy is gateway.envoyproxy.io/gatewayclass-controller. Create the file gateway-class.yaml
+
+```bash
+# A GatewayClass that uses the Envoy GatewayClass controller
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+
+# List GatewayClass objects
+kubectl get gatewayclasses
+```
+
+**Creating Gateways**
+With the GatewayClass instantiated, create a Gateway resource to handle incoming traffic.
+
+```bash
+# A Gateway exposing an HTTP listener
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: hello-world-gateway
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+```
+
+There’s only one additional object to set up to finalize the HTTP traffic routing: the HTTPRoute object.
+
+**Creating HTTPRoutes**
+
+```bash
+# An HTTPRoute routing traffic to a Service backend
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hello-world-httproute
+spec:
+  parentRefs:
+    - name: hello-world-gateway
+  hostnames:
+    - "hello-world.exposed"
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: web
+          port: 3000
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+```
+
+**Network Policies**
+The uniqueness of the IP address assigned to a Pod is maintained across all nodes and namespaces. This is accomplished by allocating a dedicated subnet to each registered node during its creation. The Container Network Interface (CNI) plug-in handles the leasing of IP addresses from the assigned subnet when a new Pod is created on a node. Consequently, Pods on a node can seamlessly communicate with all other Pods running on any node within the cluster.
+
+By default, Kubernetes allows unrestricted Pod-to-Pod communication across all namespaces, which poses a significant security risk, as a compromised Pod in one namespace could potentially access sensitive services in another namespace.
+
+Network policies in Kubernetes function similarly to firewall rules, specifically designed for governing Pod-to-Pod communication. These policies include rules specifying the direction of network traffic (ingress and/or egress) for one or multiple Pods within a namespace or across different namespaces. Additionally, these rules define the targeted ports for communication. This fine-grained control enhances security and governs the flow of traffic within the Kubernetes cluster.
+
+**Working with Network Policies**
+Within a Kubernetes cluster, any Pod can talk to any other Pod without restrictions using its IP address or DNS name, even across namespaces. Not only does unrestricted inter-Pod communication pose a potential security risk, it also makes it harder to understand the mental communication model of your architecture. A network policy defines the rules that control traffic from and to a Pod.
+
+For example, there’s no good reason to allow a backend application running in a Pod to talk directly to the frontend application running in another Pod. The communication should be directed from the frontend Pod to the backend Pod.
+
+**Installing a Network Policy Controller**
+A network policy cannot work without a network policy controller. The network policy controller evaluates the collection of rules defined by a network policy.
+
+Some CNIs like flannel do not include a network policy controller and focus solely on providing basic Pod-to-Pod connectivity, meaning NetworkPolicy resources will be accepted by the API but completely unenforced.
+
+Cilium is a CNI that implements a network policy controller. You can install Cilium on cloud-provider and on-prem Kubernetes clusters.
+
+Once it is installed, you should find at least two Pods running Cilium and the Cilium Operator in the kube-system namespace.
+
+**Creating a Network Policy**
+Label selection plays a crucial role in defining which Pods a network policy applies to. We’ve already seen this concept in action in other contexts (e.g., the Deployment and the Service). Furthermore, a network policy defines the direction of the traffic to allow or disallow. In the context of a network policy, incoming traffic is called ingress, and outgoing traffic is called egress. For ingress and egress, you can allowlist the sources of traffic like Pods, IP addresses, or ports.
+
+You cannot create a new network policy with the imperative create command. Instead, you will have to use the declarative approach.
+
+```bash
+# Declaring a NetworkPolicy with YAML
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-allow
+spec:
+  podSelector:
+    matchLabels:
+      app: payment-processor
+      role: api
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: coffee-shop
+```
+
+A network policy defines a couple of important attributes, which together form its set of rules. The table below shows the attributes on the spec level.
+
+Spec attributes of a network policy
+
+| Attribute   | Description                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| podSelector | Selects the Pods in the namespace to apply the network policy to.                        |
+| policyTypes | Defines the type of traffic (i.e., ingress and/or egress) the network policy applies to. |
+| ingress     | Lists the rules for incoming traffic. Each rule can define from and ports sections.      |
+| egress      | Lists the rules for outgoing traffic. Each rule can define to and ports sections.        |
+
+You can specify ingress and egress rules independently using spec.ingress.from[] and spec.egress.to[]. Each rule consists of a Pod selector, an optional namespace selector, or a combination of both.
+
+Attributes of a network policy to and from selectors
+
+| Attribute                         | Description                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| podSelector                       | Selects Pods by label(s) in the same namespace as the network policy that should be allowed as ingress sources or egress destinations |
+| namespaceSelector                 | Selects namespaces by label(s) for which all Pods should be allowed as ingress sources or egress destinations                         |
+| namespaceSelector and podSelector | Selects Pods by label(s) within namespaces by label(s)                                                                                |
+
+**Visualizing network policies**
+Defining the rules of network policies correctly can be challenging. The page networkpolicy.io provides a visual editor for network policies that renders a graphical representation in the browser.
+
+**Applying Default Network Policies**
+The principle of least privilege is a fundamental security concept, and it’s highly recommended when it comes to restricting Pod-to-Pod network traffic in Kubernetes. The idea is to initially disallow all traffic and then selectively open up only the necessary connections based on the application’s architecture and communication requirements.
+
+You can lock down Pod-to-Pod communication with the help of a default network policy. Default network policies are custom policies set up by administrators to enforce restrictive communication patterns by default.
+
+The example below defines a default network policy that denies all ingress and egress network traffic in the namespace.
+
+```bash
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: internal-tools
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+# The curly braces for spec.podSelector mean “apply to all Pods in the namespace.”
+
+# Defines the types of traffic the rule should apply to, in this case ingress and egress traffic.
+
+# The network policy prevents any network communication between the Pods in the internal-tools namespace
+```
+
+With those default deny constraints in place, you can define more detailed rules and loosen restrictions gradually. Network policies are additive. It’s common practice to now set up additional network policies that will open up directional traffic, but only the ones that are really required.
+
+**Restricting Access to Specific Ports**
+Controlling access at the port level is a critical aspect of network security in Kubernetes. If not explicitly defined by a network policy, all ports are accessible, which can pose security risks. For instance, if you have an application running in a Pod that exposes port 80 to the outside world, leaving all other ports open widens the attack vectors unnecessarily. Port rules can be specified for ingress and egress as part of a network policy.
+
+```bash
+# Definition of a network policy allowing ingress access on port 80
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: port-allow
+  namespace: internal-tools
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: consumer
+    ports:
+    - protocol: TCP
+      port: 80
+
+# Only allows incoming traffic on port 80
+
+# When defining network policies, only allow those ports that are required for implementing your architectural needs. All other ports should be locked down.
+```
+
+### Troubleshooting
+
+The Troubleshooting domain of the exam focuses on diagnosing and resolving issues across the entire Kubernetes stack, from cluster-level problems to application-specific failures. Key competencies include identifying and fixing problems with cluster components, troubleshooting node failures and resource constraints, monitoring resource utilization for both cluster infrastructure and applications, analyzing container logs and output streams for debugging, and resolving service connectivity and networking issues such as DNS problems, network policies, and service endpoint configurations.
+
+**Troubleshooting Applications**
