@@ -14,31 +14,27 @@ The network is not reliable and can not be trusted, distributed applications sho
 
 **_Istio is an open source implementation of a service mesh, it has a sidecar and sidecar-less implementation._**
 
-**Why use Istio?**
+The core value proposition is reduced operational overhead — Istio handles traffic management, security, and observability at the infrastructure layer, so developers don't need to build any of it into application code.
 
-- Traffic Management:
-  - Istio enables you to customize traffic routing based on different criteria, you can do Traffic splitting, canary releases, mirroring, etc. Without something like Istio, you will go back to using an application loadBalancer to distribute traffic but you lack that fine grained control that Istio offers.
-- Security:
-  - Istio automatically encrypts traffic between workload using mTLS, with something like Istio service mesh you would send unencrypted traffic between workloads, you will be managing TLS certs if you did need to encrypt traffic.
-- Policies:
-  - Istio allows you to implement access control policies and configure to only accept traffic from authorized services.
-- Observability:
-  - Istio provides centralized logging, makes it easier to aggregate and analyze logs, you can use tools like Jagger or Datadog APM, to trace, debug and optimize microservices.
-- Resilience and Reliability:
-  - Istio allows you to implement resilient strategies like circuit breaking, timeouts, retries, mitigation of cascading failures during a service degradation, without something like Istio, you have to build a combination of practices where devs are implementing circuit breakers, timeouts within the workloads to prevent these cascading failures and it's a lot of work.
+Specifically, Istio gives you:
 
-One of the best reasons to use Istio is the Reduced operational overhead. Istio reduces the manual operation burden of managing proxies, encrypting traffic, building extended logging, traffic routing, etc. Developers no longer need to code all these things into the application because Istio will handle all off that. Istio is transparent to the developers, the workload(application) doesn't even know the sidecar proxy is there.
+- Traffic Management — fine-grained routing, traffic splitting, canary releases, and mirroring; beyond what a standard load balancer offers
+- Security — automatic mTLS between workloads; no manual cert management
+- Access Control — policy enforcement limiting traffic to authorized services only
+- Observability — centralized metrics, logs, and distributed tracing via tools like Jaeger or Datadog APM
+- Resilience — circuit breaking, retries, and timeouts configured at the mesh level, eliminating the need for developers to implement these per service
 
 ### Why Istio? Because implementations of service mesh already existed before Istio
 
 **Istio Sidecar mode**
+Istio builds on Envoy, a high-performance reverse proxy, by abstracting away its notoriously complex configuration through a control plane. You get Envoy's full power — traffic management, policy enforcement, observability — without touching its raw config.
+In Kubernetes, Envoy runs as a sidecar container alongside each workload, transparently intercepting all inbound and outbound traffic to handle:
 
-- Istio uses an open source reverse proxy called Envoy which handles connections, it can allow you to enforce policy, it also allows you to provide an observability point and other capabilities that can be highly customized. Istio takes advantage of this very high-powered proxy, but also automate it and the make it available to workloads in a very simplistic manner. So you can use Envoy but through a control plane that abstracts how you would configure Envoy and this primarily because Envoy itself is very complex to configure. Istio solves this particular problem where it will simplify how you would configure envoy but you wouldn't have to directly configure it.
+- Routing — path selection and load balancing across service instances
+- Security — mTLS encryption and service-to-service authentication
+- Observability — traffic volume, latency, and error tracking per service
 
-Envoy proxy is like a traffic controller for your application. In a large distributed system where there are many application(services) that need to talk to each other, envoy proxy makes sure the messages between those services get to the right place in the fastest and safest way possible.
-In a Kubernetes ecosystem the envoy proxy(sidecar) is a completely separate container that runs along side your main application workload and acts as the middle man intercepting all communication in and out of the application, it will route traffic choosing the best path to deliver the message, it also acts as a loadBalancer distributing traffic across multiple instances(Pods) of a service, also makes sure that the communication between services is secure, it encrypts the message so that no one can snoop in on it and it also ensures that only trusted services can talk to one another, it also enables system monitoring, tracks volume of traffic to each application, how long it takes to get a response(measures response times) and if any applications are having issues.
-
-**It's Istio implementation**
+**Istio's Sidecar implementation**
 
 - In namespaces where Istio is enabled, Istio adds another container(Sidecar container) to the existing contains in every Pod.
 - The side car container is an envoy proxy server which handles traffic management of the pods. It intercepts traffic going in or out of containers in a pod.
@@ -46,20 +42,32 @@ In a Kubernetes ecosystem the envoy proxy(sidecar) is a completely separate cont
 - Anything that you pass as a YAML configuration that Istio understands, IstioD will then take that configuration and translate it for Envoys understanding and that becomes a configuration. This connection, translation and issuance of configuration happens through something called the XDS data plane which is part of envoy. XDS data plane is the mechanism and the lane way for which istio sends configs to Envoy.
 
 Istio is an orchestrator that facilitates the management of Envoy Proxies.
-Architecture:
 
-- Istio service mesh has two components: Data plane and Control plane.
-  - Data plane is responsible for managing and controlling traffic between microservices, it deploys sidecar proxies(Envoy Proxies) alongside each workloads and handles routing, loadBalancing, encryption using MTLS and security authentication.
-  - Control plane is responsible for managing and configuring the Data plane, it handles distributing policies(Network policies), Certificate, managing Service Discovery, Authentication, Authorization and dynamically updating configuration for all of the proxy sidecars, all of this is handled by IstioD(It's a Pod or the Pilot container) that runs inside of the cluster when you install Istio.
-    - IstioD provides Service discovery and configuration, It translates high level routing rules that govern traffic behavior in Envoy Proxy specific configuration and applies it to the sidecars at run time, It also acts as Certificate authority and generates Certificates to allow secure mTLS communication between the workloads, allows you to do secure service to service and end user authentication with built-in Identity and credential management, additionally you can use Istio's authorization feature to control who has access to your services.
+**Architecture**
+Istio is logically split into two planes: Data Plane and Control Plane.
+Data Plane — consists of Envoy proxies deployed as sidecars alongside each workload. They mediate all inbound and outbound network communication between services, handle routing, load balancing, mTLS encryption, and collect telemetry on all mesh traffic.
+Control Plane — a single binary called Istiod that manages and configures the data plane. It is responsible for:
 
-### Admission Controllers
+Service Discovery & Configuration — translates high-level routing rules (VirtualServices, DestinationRules, etc.) into Envoy-specific configuration and propagates them to the sidecars at runtime
+Certificate Authority — generates and rotates certificates to enable secure mTLS communication between workloads
+Authentication & Authorization — enables service-to-service and end-user authentication with built-in identity and credential management; enforces access control policies over who can communicate with which services
 
-- How Istio adds Sidecar containers to every Pod, when a request is sent to the API server for a Pod creation, Istio should immediately be notified, so it can decide if it wants to add a Side car container to it, Istio uses an advanced concept Admission controllers called **Dynamic Admission control** or **Admission webhook** to achieve this.
-  - A simple request to the API server, for instance a user wants to create a Pod in Kubernetes Cluster (using kubectl apply ....), request goes to the API server, a component in the API server checks if the user is authenticated and authorized to perform this request or not, if the user is authenticated and authorized, then API server will take this object and persist(stores) it in etcd. Admission controllers can intercept(Mutate or Validate) the request before it's persisted in etcd.
-  - For example, lets say you want to create a PVC and you didn't add a storageClass in the PVC object, before the resource is added to etcd, there's an admission controller called storageClass admission controller, it will check if the PVC has the storage class field or not, if it doesn't, it will mutate the object and add the field, then the object is persisted in etcd. There are about 30+ admission controllers available by default in every Kubernetes cluster, you don't have to install them, they are precompiled into the API server.
-  - How Istio implements admission controllers, if you look at all the other admission controllers, they are precompiled into the API server, API server clearly knows how to invoke them and what action will those admission controllers take, either mutate or validate an object. In the case of Istio to add a side car controller, Istio should know when a pod creation request comes to the API server and some how API server should notify Istio now you can proceed with the side car injection, the concept is called Dynamic Admission Control.
-    - This happens in multiple stages, Pod creation request comes to the API server, API server performs Authentication and Authorization, then there are two special admission controllers "Mutating Admission webhook controller" and "Validation Admission webhook controller". The responsibilities of these controllers is to take requests from the API server and they notify Istio or any other project that wants to implement the side car injection or any kind of mutation and validation, these components do not directly perform the mutation and validation, it only forwards the requests to "ISTIOD Admission webhook(part of ISTIOD)", this ISTIOD webhook then performs the mutation logic(Injects the sidecar container) and object is persisted into etcd.
+Istiod was introduced in Istio 1.5, consolidating what were previously separate components — Pilot, Galley, and Citadel — into a single binary.
+
+### Admission Controllers & Sidecar Injection
+
+When a Pod creation request hits the API server, it passes through three stages: Authentication/Authorization → Mutation → Validation, before the object is persisted in etcd. Admission controllers intercept requests at the mutation or validation stage.
+Kubernetes ships with 30+ built-in admission controllers precompiled into the API server — for example, the StorageClass admission controller automatically injects a default storageClass into a PVC if one isn't specified.
+The problem with Istio: unlike built-in controllers, Istio is external — the API server has no native awareness of it. This is solved by Dynamic Admission Control (Admission Webhooks).
+Two special built-in controllers — the MutatingAdmissionWebhook and ValidatingAdmissionWebhook — act as forwarders. They don't perform mutation or validation themselves; they forward the request to an external webhook endpoint. For Istio, that endpoint is the Istiod Admission Webhook.
+The sidecar injection flow:
+
+1. Pod creation request → API server
+2. Authentication & Authorization
+3. MutatingAdmissionWebhook forwards request → Istiod webhook
+4. Istiod injects the Envoy sidecar container into the Pod spec
+5. ValidatingAdmissionWebhook runs validation
+6. Object is persisted in etcd
 
 ### Sidecar drawbacks
 
@@ -194,129 +202,217 @@ EOF
 kubectl label ns default istio.io/use-waypoint=waypoint
 ```
 
-### Capabilities of Istio
-
-- Load Balancing
-- Service to Service authentication: this can easily be broken down to authenticating your requests, how mTLS functions, how certificates are issued. We can even breakdown the service-service authorization and how Istio enforces policies.
-- Monitoring, Tracing and Logging: The reason why we would want to do Monitoring and Logging within our service mesh is really to understand the traffic part of a request, there might be multiple services that are hitting that path before a request provides a response. If there's a failed service we want to know about it, why it failed and how to recover from it. There are capabilities such as tracing that are built into the service mesh, we are able to extract logging information from a sidecar point of view and we're able to pair with tools like Prometheus and Grafana to capture some more Telemetry.
-- Service resiliency: It's about tunning your microservices and the way and how quickly they respond, so if we haven't truly implemented autoscaling, we could be in a situation where one service is overloaded with a number of requests and because of the fact that it's overloaded that could translate to an over consumption of CPU and memory, when it runs out of CPU and Memory what happens? it cannot do anything, it's like halted at that point. So we have to accommodate for that level of buffering and flow control so that when we send out a request we shouldn't expect a quick response, but if we are, we have to tune the rest of that request path accordingly
-
 - Some pre-requisites for Pods to be part of Istio Service Mesh:
   - Pods should always run behind one or more service
   - Pods should not run with a security context with user id 1337
   - Pods should run with NET_ADMIN and NET_RAW capabilities
   - Pods/Deployments should have labels "app" and "version"
 
-### Traffic Management (sidecar vs sidecar-less mesh)
+### Traffic Management
 
-Traffic management is Routing rules
+Traffic management in Istio is fundamentally about routing rules — controlling how traffic flows between services in the mesh.
+Core APIs (Istio CRDs, with Gateway API equivalents in parentheses):
 
-- Components in Traffic Management:
-  - Virtual Services (Replaced by Gateway API Routes): Routing of traffic.
-  - Destination Rules (Replaced by Gateway API Routes): Demonstrating subsets and load balancing.
-  - Gateways(istioIngressGateway) (Replaced by Gateway API Gateways): Exposing traffic to the public.
-  - Service Entries: Introducing external services like Databases to the service mesh.
-  - Sidecars
-  - Release strategies (Traffic Mirroring, A/B Testing, etc.)
-  - Solving microservice failures and preventing cascading failures using Circuit Breaking
-  - Resilience through Fault Tolerance
-  - Simulating delays and errors to test behavior
-  - Using Timeouts and Retries to recover from failures.
-  - Istio Ambient Mode (Layer 4 traffic with zTunnel and Layer 7 traffic with Waypoint proxies).
+- VirtualService (HTTPRoute) — defines routing rules; where traffic goes and how
+- DestinationRule (HTTPRoute + BackendPolicy) — defines subsets and load balancing policy per destination
+- Gateway / IngressGateway (Gateway API Gateway) — exposes services to external traffic
+- ServiceEntry — registers external services (e.g. a managed database) into the mesh so they can be governed by Istio policies
 
-### Virtual services
+Capabilities:
 
-Virtual service allows you to configure traffic routing rules for your kubernetes services.
-Why use a virtual service, if kubernetes service already achieves that by forwarding traffic to the deployments, Pods. What else are we really getting out of virtual service? Virtual service offer:
+- Release strategies — traffic splitting, canary releases, A/B testing, traffic mirroring
+- Resilience — timeouts, retries, and fault injection (simulated delays and errors for testing)
+- Failure mitigation — circuit breaking to prevent cascading failures during service degradation
 
-- Fine-grained routing using headers, URIs, and query parameters. These are things that a regular Kubernetes service can not do, Kubernetes service does not offer layer 7 capabilities.
-- Manages traffic routing between different versions of a service, for example implement Canary releases(gradually introducing a new version of a service to a small percentage of Users to test before rolling it out to production), A/B Testing, and Blue/Green deployments(Switching traffic from an old version to a new version). The regular kubernetes service isn't able to do this.
-- Simulate faults in the application to test service resilience.
-- Configure retries and timeouts to improve reliability of an application.
-- Use advanced load balancing features that support strategies like round-robin, weighted routing, etc.
+Sidecar vs Sidecar-less (Ambient Mode):
 
-- Translates a hostname to a kubernetes service, once it finds that match of the kubernetes service by default as long as there's no other policy applied to it, it will forward that request to the label that matches that kubernetes service which happens to be the Pod.
+Ambient mode removes the per-pod sidecar entirely, replacing it with a shared node-level ztunnel for Layer 4 (mTLS, basic routing) and an optional Waypoint proxy per namespace or service for Layer 7 capabilities (advanced routing, policies). This reduces resource overhead while preserving the full Istio feature set where needed.
 
-**Canary Release**
-Deploy a new version of software component (for us, new image). **_But only make the new image "live" for a percentage of the time_**
-Most of the time, the old (definitely working ) version is the one being used.
+### VirtualService
 
-**_A Virtual Service enable us to configure custom routing rules to the service mesh_**
+A Kubernetes Service handles basic traffic forwarding to Pods, but operates at Layer 4 — it has no awareness of HTTP headers, URIs, or request content. A VirtualService extends this with Layer 7 routing capabilities.
+What VirtualService adds:
 
-**Virtual Service Configuration vs Route Configuration**
+- Fine-grained routing — route based on headers, URIs, query parameters, or other request attributes
+- Traffic splitting — canary releases, A/B testing, and blue/green deployments by routing percentages of traffic to different service versions
+- Fault injection — simulate delays and errors to test service resilience
+- Timeouts & retries — improve reliability without modifying application code
+- Advanced load balancing — weighted routing, round-robin, and other strategies beyond what a standard Service provides
+
+How it works:
+A VirtualService binds to a hostname and maps it to a Kubernetes Service. When a request matches, Istio evaluates the routing rules defined in the VirtualService and forwards traffic accordingly — to the matching Pods via the underlying Service, or to a specific subset defined in a DestinationRule.
+Without any additional policies, it behaves like a standard Service. The power comes from layering routing rules on top.
+
+**_All three release strategies (canary, A/B, blue/green) use VirtualService and DestinationRule, but they differ in how the routing decision is made_**:
+
+- canary release (route by weight/percentage) — gradually shifting traffic to a new version
+- blue/green (route all traffic to one version, then switch 100% at once) — switching traffic from old to new in a controlled way
+- A/B testing (route by request attributes (header, cookie, user identity)) — splitting traffic between variants to compare behaviour.
+
+**Canary Releases - Istio CRD (Virtual services/Destination rules)**
+A canary release deploys a new version of a service but only routes a small percentage of live traffic to it — the majority continues hitting the stable version until confidence is established.
+In Istio's networking API, this requires two resources working together:
+
+**DestinationRule** — groups Pods into named subsets using label selectors, and optionally applies traffic policies (load balancing, connection limits, circuit breaking, mTLS) per subset.
+
+```bash
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: reviews-destination
+  namespace: default
+spec:
+  host: reviews.default.svc.cluster.local
+  subsets:
+  - name: stable-group
+    labels:
+      version: v1
+  - name: canary-group
+    labels:
+      version: v2
+```
+
+**VirtualService** — references those subsets and defines the traffic split. 90% to stable, 10% to canary:
 
 ```bash
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
-  name: reviews-route. # "Just" a name for this virtual service
-  namespace: default # Put VS in the same namespace as the target service
-spec:
-  hosts:
-  - reviews.default.svc.cluster.local # The Service DNS (ie the fully qualified name of  regular k8S Service) Name that we're applying routing rules to.
-  http:
-  - route:
-      - destination:  # Destination could be different services, it intercepts traffic intended for spec.hosts
-          host: reviews.default.svc.cluster.local # Target DNS name where the intercepted traffic should go.
-          subset: stable-group # This is pointing to one of the names defined in the DestinationRule subsets
-        weight: 90
-      - destination:
-          host: reviews.default.svc.cluster.local # Target DNS name
-          subset: canary-group # also pointing to a name in the destinationRule subsets
-        weight: 10
-
-```
-
-### Destination Rules vs Route Rules
-
-Sets polices for traffic after routing. It applies rules once traffic reaches the Virtual service. For example we have two versions of workloads and you want to split traffic 50/50, you would use destination rule to configure this.
-
-- Destination rules defines subsets (e.g., v1/v2) and applies policies to control traffic across service versions.
-- Configures how Istio load balances traffic to a service
-- It's used to configure parameters like maximum number of connections, timeouts, max idle connections that you can make to a service.
-- If you want to configure circuit breaking policies you will need destination rule.
-- It can also enforce mTLS between services, which you can also apply with the peerAuth
-
-```bash
-# A configuration for a load balancer for a particular service.
-apiVersion: networking.istio.io/v1
-kind: DestinationRule # Defining which pods should be part of each subset. e.g., subset V2 which is acting as the canary and v1 which is not the canary.
-metadata:
-  name: reviews-destination # Doesn't matter what you call this
+  name: reviews-route
   namespace: default
 spec:
-  host: reviews.default.svc.cluster.local # Service fully qualified domain
-  subsets: # All the pods that are part of the spec.host service
-  - name: stable-group # Group all the pods with label version: v1 and call it v1
-    labels:  # This is a SELECTOR for the pods that are part of a service.
-      version: v1 # This is saying find pods with the label "v1"
-  - name: canary-group # Group all the pods with label version: v2 and call it v2
-    labels:
-      version: v2
+  hosts:
+  - reviews.default.svc.cluster.local
+  http:
+  - route:
+    - destination:
+        host: reviews.default.svc.cluster.local
+        subset: stable-group
+      weight: 90
+    - destination:
+        host: reviews.default.svc.cluster.local
+        subset: canary-group
+      weight: 10
 ```
 
-### Load Balancing
+How they relate: the DestinationRule defines what the subsets are (which Pods belong to each group); the VirtualService defines how much traffic each subset receives. Neither works for canary without the other.
 
-Options we can apply to change the load balancing algorithm on a Virtual Service.
-
-Can we make getting a canary or a non canary to stick? Can we make it that if a user visits a site for the first time, 90% of the time they will get one version and 10% of the time they will get the other version but for every subsequent requests from that user, they get the same response back?
-
-Is it possible to use the weighted destination rules to make a single user "stick" to a canary?
-No we can't make it work using the weighting functionality provided by Virtual service
-
-**Session Affinity ("Stickiness")**
-The DestinationRule has a field called trafficPolicy, it's related to the loadbalancer settings
-
-**What is Consistent Hashing useful for?**
-Here's a general example that can happen anywhere, you have a set of pods they could be sets of software components (Pod(Canary) -- Pod(Non Canary)), then a client accessing these pods, with the load balancer we use in kubernetes (The default algorithm we use in load balancers is round robin), the first request from the client will hit the load balancer and directed to Pod(Canary), the the next request will go to Pod(Non Canary), so on and so forth.
-But there're different algorithms that can be applied to load balancers, consistent hashing is one of them.
-The deal with consistent hashing is we arrange things in such away that the client has some kind of data, as a simple example the client has an IP address. Now let's use that as an example, what consistent hashing will do in a load balancer is when the request is received by the load balancer, it will also receive a copy of the data and run that data through a hashing algorithm, doesn't matter what the algorithm is, any hash algorithm will do. The hash algorithm is an algorithm that will take the data, run it through some kind of routine and out will come a value that's completely different to the value that went in. Crucial aspect of a hashing algorithm is if you feed the same data in again you will get the same has back out again. The same data in will always give the same data back out.
-In consistent hashing the load balancer will use the result of this hash to decide which of the targets to forward to.
-When client makes subsequent requests and if the data passed by the client to the loadbalancer is always the same, then that traffic will be sent to the same target all the time.
+**Canary Release — Gateway API (HTTPRoute)**
+With the Gateway API, you don't need a DestinationRule. Traffic splitting is expressed directly in a single HTTPRoute resource using weighted backendRefs — each pointing to a separate Kubernetes Service per version.
+This means you deploy two Services: one for stable (reviews-stable) and one for canary (reviews-canary), each selecting Pods by their version label.
 
 ```bash
-# Note this is not going to work
-# Session affinity doesn't apply to weighted subsets - Envoy doesn't support it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: reviews-route
+  namespace: default
+spec:
+  parentRefs:     #the Service traffic is intercepted from
+  - name: mesh          # attaches to the mesh for east-west (service-to-service) traffic
+    kind: Service
+    group: core
+    name: reviews
+  rules:
+  - backendRefs: #the version-specific Services traffic is forwarded to
+    - name: reviews-stable
+      port: 9080
+      weight: 90
+    - name: reviews-canary
+      port: 9080
+      weight: 10
+```
+
+Weights in the Gateway API are relative — 90 and 10 produce the same distribution as 9 and 1. Each individual HTTP request is independently assigned to a backend based on the weights. This also means the splitting is stateless — a single user may hit different versions on consecutive requests. If session stickiness is needed during a canary, it must be handled at the application level or via header-based routing.
+
+**A/B Testing** — route by request attributes (header, cookie, user identity)
+
+```bash
+# VirtualService
+http:
+- match:
+  - headers:
+      x-user-group:
+        exact: group-b
+  route:
+  - destination:
+      host: reviews
+      subset: v2        # group B gets version B
+- route:
+  - destination:
+      host: reviews
+      subset: v1        # everyone else gets version A
+```
+
+```bash
+# Implement A/B testing using Gateway API routes
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: reviews-route
+  namespace: default
+spec:
+  parentRefs:
+  - group: ""
+    kind: Service
+    name: reviews
+    port: 9080
+  rules:
+  - matches:
+    - headers:
+      - name: x-user-group
+        value: group-b
+    backendRefs:
+    - name: reviews-v2
+      port: 9080
+  - backendRefs:                  # default rule — everyone else
+    - name: reviews-v1
+      port: 9080
+
+```
+
+Specific users are deliberately targeted — useful for comparing behaviour between two variants.
+
+**Blue/Green** — route all traffic to one version, then switch 100% at once
+
+```bash
+# VirtualService — currently on blue (v1)
+http:
+- route:
+  - destination:
+      host: reviews
+      subset: blue
+    weight: 100
+
+# To cut over, update weight to green:
+- route:
+  - destination:
+      host: reviews
+      subset: green
+    weight: 100
+```
+
+The DestinationRule doesn't change — only the VirtualService routing rules differ between strategies.
+
+```bash
+subsets:
+- name: stable   # or blue
+  labels:
+    version: v1
+- name: canary   # or green or v2
+  labels:
+    version: v2
+```
+
+### Load Balancing & Session Affinity (only necessary when your application has stateful session concerns.)
+
+Pin users to a specific version consistently: Header-based routing or consistent hashing
+
+Weighted routing in a VirtualService (or HTTPRoute) is stateless — each request is independently assigned to a backend based on the weights. There is no memory of where a user was previously sent, so a single user can hit different versions on consecutive requests. You cannot achieve stickiness through weights alone.
+
+Session Affinity is configured in DestinationRule under trafficPolicy.loadBalancer, using consistent hashing:
+
+```bash
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
@@ -325,38 +421,197 @@ metadata:
 spec:
   host: reviews.default.svc.cluster.local
   trafficPolicy:
-    loadBalancer: #Options: simple or consistentHash
-      consistentHash: #Options: httpCookie, httpHeaderName, httpCookie, useSourceIp, httpQueryParameterName, ringHash, maglev
-        useSourceIp: true
-  subsets: ....
+    loadBalancer:
+      consistentHash:
+        httpCookie:          # Pin user to a backend using a cookie
+          name: user-session
+          ttl: 3600s
+        # alternatively:
+        # httpHeaderName: x-user-id   # Pin based on a request header
+        # useSourceIp: true           # Pin based on client IP
+  subsets:
+  - name: stable-group
+    labels:
+      version: v1
+  - name: canary-group
+    labels:
+      version: v2
+
 ```
 
-Then what's consistentHashing without weighting useful for?
+Consistent hashing ensures the same user — identified by cookie, header, or source IP — always routes to the same backend. However, this controls which Pod a user sticks to, not which subset (canary vs stable). For true canary stickiness per user, the recommended approach is header-based routing in the VirtualService — tag a user as a canary participant and route based on that header deterministically.
 
-### Traffic mirroring (Dark releases)
+**Consistent Hashing**
+The default Kubernetes load balancing algorithm is round-robin — requests from the same client cycle across all available Pods with no memory of previous routing decisions.
 
-Before we talk about Traffic mirroring, lets first talk about other release strategies.
+Consistent hashing changes this by using a property of the incoming request — an IP address, header, or cookie — as input to a hash function. A hash function takes data in and produces a different output value, but crucially: the same input always produces the same output.
 
-- Canary Release: is the process of introducing a new version of your application, the way it works is that you direct the majority of your users(e.g., 90%) to your working v1 application and have a small percentage users (e.g., 10%) hit the new version(v2), the percentages can be higher or lower.
+The load balancer runs this hash on every request and uses the result to deterministically select a backend. So as long as the client sends the same identifying data — same IP, same header, same cookie — every request hashes to the same value and always lands on the same Pod.
 
-- Blue/Green Release on the other hand is the process of switching traffic from v1 to v2, it's not done gradually, it's a hard switch. Users are hitting v1 one moment and completely switch to v2 of the application.
+```bash
+Client IP: 192.168.1.10
+      ↓
+Hash Function  →  0x4A3F...
+      ↓
+Always routes to → Pod(Stable)
+```
 
-**_Pros and Cons_**
-There are pros and cons to both deployments
+This is what makes stickiness possible — not state stored in the load balancer, but a deterministic mathematical property of the hash itself. No session tracking required.
 
-- Rollout: Changes are done gradually with canary releases, where as blue/green releases is sort of an all or nothing approach.
-- Downtime: Very low risk with canary releases, if there are any issues it will only affect a small percentage of users, whereas blue/green it's minimal because you can safely rollback to the current version if issues arise.
-- Exposure: This is where canary lacks because it's only a handful of users that are getting the new version of the app, so it's hard to say how the stack will handle when all users are switched to the new version. Blue/green on the other hand, it's a hard switch so you know immediately if your stack can handle it or not and safely rollback if it fails.
+**Session Affinity with Gateway API**
+Consistent hashing in the Gateway API is configured via an HTTPRoute filter or a backend-specific policy. In Istio's implementation, you still use a DestinationRule for the hashing policy even when using Gateway API routes, because the Gateway API itself has no native equivalent of trafficPolicy.loadBalancer.
 
-In summary canary release is a ideal for gradually testing and rolling out changes with minimal risk and blue/green releases allow for fast, somewhat safe switch between both versions of the application. Only if there was a way to get the best of both worlds, luckily there is, Istio service mesh offers a feature called mirroring.
-Istio mirroring is a feature that allows you to send a copy of the live traffic to both production and testing environments at the same time without breaking production.
-Mirroring uses both Virtual service and Destination rule in other to mirror traffic.
+The Gateway API has no built-in equivalent for trafficPolicy.loadBalancer. Consistent hashing in Istio is exclusively a DestinationRule feature, and that remains true even when you use HTTPRoute for traffic splitting.
 
-It enables testing of new services in live production without affecting users, that's it's advantage over canary and blue/green deployments. It's really the best of both worlds. Safely switch to the new version after validation.
+So in a Gateway API setup, you use a hybrid approach — HTTPRoute for routing, DestinationRule for the hashing policy:
 
-### Edge Proxies and Gateways
+```bash
+# HTTPRoute routes all traffic to one service (Gateway API)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: reviews-route
+  namespace: default
+spec:
+  parentRefs:
+  - group: ""
+    kind: Service
+    name: reviews
+    port: 9080
+  rules:
+  - backendRefs:
+    - name: reviews
+      port: 9080
 
-Configuring instance of envoy that sits at the edge of your cluster, configured to listen to all incoming requests from the outside world, which means we can configure the regular envoy proxy rules such as a 90% - 10% canary. Istio Ingress Gateway allows us to configure an edge proxy. You can configure the gateway using regular Istio config, traffic are routed through the proxy and there for the Virtual service rules can be applied. The Istio ingress gateway creates a service of loadBalancer, which inturn creates a physical loadBalancer in a cloud provider, your users will access your service through the loadBalancer endpoint.
+
+---
+
+# DestinationRule pins users to the same Pod via consistent hashing
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: reviews-stable-dr
+  namespace: default
+spec:
+  host: reviews-stable.default.svc.cluster.local
+  trafficPolicy:
+    loadBalancer:
+      consistentHash:
+        httpCookie:
+          name: user-session
+          ttl: 3600s
+
+```
+
+You'd apply a separate DestinationRule per version-specific Service (reviews-stable, reviews-canary) since there are no subsets in the Gateway API model.
+
+### Traffic Mirroring (Dark Releases)
+
+Before covering mirroring, a quick comparison of the two main release strategies:
+
+Canary — gradual rollout; a small percentage of users hit the new version while the majority stays on the stable version. Low risk, but limited exposure makes it hard to predict how the stack behaves under full load.
+
+Blue/Green — hard switch; all traffic moves from v1 to v2 at once. Immediate full exposure with fast rollback, but all users are impacted if something goes wrong.
+
+Traffic Mirroring bridges the gap — it gives you the best of both worlds.
+Istio mirrors a copy of live production traffic to a new version simultaneously, without affecting the actual user response. Production traffic continues hitting v1 as normal; v2 receives an identical copy in the background. Responses from v2 are discarded — users never see them.
+This means you can:
+
+- Validate v2 behaviour under real production traffic and load
+- Catch bugs and performance issues before any user is exposed
+- Switch over to v2 confidently once validation passes
+
+It's the safest release strategy available — real traffic, zero user impact.
+
+Traffic Mirroring — Istio API (VirtualService + DestinationRule)
+
+The DestinationRule remains the same as before — defining subsets by label:
+
+```bash
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: reviews-destination
+  namespace: default
+spec:
+  host: reviews.default.svc.cluster.local
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+  - name: v2
+    labels:
+      version: v2
+```
+
+The VirtualService routes 100% of traffic to v1, while mirroring a copy to v2:
+
+```bash
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: reviews-route
+  namespace: default
+spec:
+  hosts:
+  - reviews.default.svc.cluster.local
+  http:
+  - route:
+    - destination:
+        host: reviews.default.svc.cluster.local
+        subset: v1
+      weight: 100           # all live traffic goes to v1
+    mirror:
+      host: reviews.default.svc.cluster.local
+      subset: v2            # a copy is silently sent to v2
+    mirrorPercentage:
+      value: 100.0          # mirror 100% of traffic — can be reduced e.g. 50.0
+```
+
+mirrorPercentage controls what proportion of v1 traffic gets mirrored to v2. You can start low (e.g. 10%) and increase as confidence grows. Responses from v2 are fire-and-forget — discarded, never returned to the user.
+
+Traffic Mirroring — Gateway API (HTTPRoute)
+
+With Gateway API, mirroring is expressed as an HTTPRoute filter using RequestMirror:
+
+```bash
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: reviews-route
+  namespace: default
+spec:
+  parentRefs:
+  - group: ""
+    kind: Service
+    name: reviews
+    port: 9080
+  rules:
+  - filters:
+    - type: RequestMirror
+      requestMirror:
+        backendRef:
+          name: reviews-v2    # mirror target
+          port: 9080
+        percent: 100          # percentage of traffic to mirror
+    backendRefs:
+    - name: reviews-v1        # all live traffic goes to v1
+      port: 9080
+
+```
+
+Key difference:
+With Gateway API, mirroring is a native filter on the HTTPRoute — no DestinationRule needed. Cleaner and self-contained in a single resource.
+
+### Edge Proxies and Gateways (Istio API)
+
+The Istio Ingress Gateway is an Envoy proxy that sits at the edge of the cluster, handling all incoming external traffic. It creates a Kubernetes LoadBalancer Service which provisions a cloud load balancer — users access your application through that endpoint.
+
+Without a gateway, Istio's traffic management rules (VirtualService routing, weights, etc.) cannot be applied to the first service in the chain — the sidecar only intercepts traffic after the container is already running. Introducing an Ingress Gateway puts a configurable proxy in front of that first service, enabling full traffic management for externally accessed services.
+
+Two resources are required:
+
+Gateway — configures what the edge proxy listens on (ports, protocols, hostnames):
 
 ```bash
 apiVersion: networking.istio.io/v1
@@ -365,27 +620,29 @@ metadata:
   name: ingress-gateway-configuration
 spec:
   selector:
-    istio: ingressgateway # use Istio default gateway implementation
+    istio: ingressgateway       # targets the default Istio gateway Pod
   servers:
   - port:
       number: 80
       name: http
       protocol: HTTP
     hosts:
-    - "*" # External facing Domain name of the website
----
+    - "*"                       # accepts traffic for any hostname
+```
 
+VirtualService — binds to the Gateway and applies routing rules:
+
+```bash
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: webapp
   namespace: default
 spec:
-  hosts: # which incoming host are we applying the proxy rules to?
-  - "*" # Copy the value in the gateway host
-  - webapp.default.svc.cluster.local # the value of the internal service
+  hosts:
+  - "*"                               # matches the Gateway host
   gateways:
-  - ingress-gateway-configuration
+  - ingress-gateway-configuration     # binds to the Gateway above
   http:
   - route:
     - destination:
@@ -396,11 +653,170 @@ spec:
         host: webapp
         subset: experimental
       weight: 10
-
 ```
 
-You don't 100% need an Istio gateway, the gateway however becomes essential if you want to apply custom traffic rules to any services which are referred to as been on the edge, for example a webapp service that's been access directly from outside the cluster. It really means the first service in a chain that's been accessed.
-If you don't have the gateway the proxies can't be used fro traffic management because because it's run after a target container is run, so by introducing an istio gateway, this is really just a proxy that you're putting in front of your application and that means custom traffic rules can be applied to the first service in a chain, referred to as the edge service.
+The Gateway defines where traffic enters; the VirtualService defines where it goes. Without the VirtualService binding, the Gateway accepts traffic but has nowhere to route it.
+
+**Implementing encryption**
+There are two distinct segments to consider:
+
+1. External traffic (client → Ingress Gateway)
+   This is TLS termination at the edge. You configure the Gateway to accept HTTPS:
+
+```bash
+servers:
+- port:
+    number: 443
+    name: https
+    protocol: HTTPS
+  tls:
+    mode: SIMPLE          # terminates TLS at the gateway
+    credentialName: webapp-tls-cert   # references a Kubernetes secret with the cert
+  hosts:
+  - "webapp.example.com"
+```
+
+Traffic from the user's browser is encrypted up to the Gateway, where TLS is terminated. From there, traffic continues inside the cluster.
+
+2. Internal traffic (Ingress Gateway → services inside the mesh)
+   This is where Istio's mTLS kicks in. Once traffic is inside the mesh, Istio automatically encrypts service-to-service communication via mTLS — including traffic from the Ingress Gateway to your backend services. No additional configuration needed if PeerAuthentication is set to STRICT mode across the mesh.
+
+3. Passthrough (end-to-end TLS)
+   If you don't want the Gateway to terminate TLS at all — letting the backend service handle it — you can configure passthrough mode:
+
+```yaml
+tls:
+  mode: PASSTHROUGH # Gateway forwards encrypted traffic as-is
+```
+
+In summary:
+
+| Segment                            | Encryption | Details                         |
+| ---------------------------------- | ---------- | ------------------------------- |
+| Client → Ingress Gateway           | TLS        | Configured on the Gateway       |
+| Ingress Gateway → backend services | mTLS       | Automatic via Istio mesh        |
+| End-to-end passthrough             | TLS        | Handled entirely by the backend |
+
+Edge Proxies & Gateways (Gateway API)
+
+With the Gateway API, three resources are involved: GatewayClass, Gateway, and HTTPRoute — replacing the Istio Gateway + VirtualService pair.
+
+The controller that implements the Gateway is selected by referencing a GatewayClass. There must be at least one GatewayClass defined in the cluster to have functional Gateways. Istio's gateway controller (istio.io/gateway-controller) is referenced via gatewayClassName: istio.
+
+In the default configuration, a gateway Deployment and Service is automatically provisioned based on the Gateway configuration — you don't need to install an ingress gateway Deployment prior to configuring a Gateway. This is a notable improvement over the Istio API where the IngressGateway Pod must be pre-installed.
+
+```bash
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: webapp-gateway
+  namespace: istio-ingress
+spec:
+  gatewayClassName: istio           # tells Istio to implement this Gateway
+  listeners:
+  - name: http
+    hostname: "*.example.com"
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All                   # allow HTTPRoutes from any namespace
+
+---
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: webapp
+  namespace: default
+spec:
+  parentRefs:
+  - name: webapp-gateway
+    namespace: istio-ingress        # binds to the Gateway above
+  hostnames:
+  - "webapp.example.com"
+  rules:
+  - backendRefs:
+    - name: webapp-stable
+      port: 8080
+      weight: 90
+    - name: webapp-canary
+      port: 8080
+      weight: 10
+```
+
+The Gateway configuration resources allow external traffic to enter the Istio service mesh and make the traffic management and policy features of Istio available for edge services.
+
+**TLS Termination at the Gateway** (Gateway API)
+
+Same two segments as before: external TLS and internal mTLS — but configured differently:
+
+External traffic (client → Gateway):
+
+```bash
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: webapp-gateway
+  namespace: istio-ingress
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: https
+    hostname: "webapp.example.com"
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate               # terminates TLS at the Gateway
+      certificateRefs:
+      - name: webapp-tls-cert       # references a Kubernetes Secret with the cert
+        kind: Secret
+    allowedRoutes:
+      namespaces:
+        from: All
+```
+
+The HTTPRoute remains unchanged — it operates on the already-decrypted traffic after termination:
+
+```bash
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: webapp
+  namespace: default
+spec:
+  parentRefs:
+  - name: webapp-gateway
+    namespace: istio-ingress
+  hostnames:
+  - "webapp.example.com"
+  rules:
+  - backendRefs:
+    - name: webapp-stable
+      port: 8080
+      weight: 90
+    - name: webapp-canary
+      port: 8080
+      weight: 10
+```
+
+Passthrough (end-to-end TLS — backend handles termination):
+
+```bash
+listeners:
+- name: https-passthrough
+  port: 443
+  protocol: TLS
+  tls:
+    mode: Passthrough               # Gateway forwards encrypted traffic as-is
+```
+
+For passthrough, you use a TLSRoute instead of HTTPRoute since the Gateway cannot inspect encrypted HTTP content.
+
+Internal traffic (Gateway → backend services):
+Same as the Istio API — mTLS is handled automatically by the mesh once traffic is inside. No additional configuration needed if PeerAuthentication is set to STRICT mode.
+
+The structural difference is minor — the Gateway API uses a typed certificateRefs block instead of a plain credentialName string, and passthrough gets its own dedicated route type rather than being a VirtualService match condition.
 
 ### Service entry
 
