@@ -2487,3 +2487,236 @@ spec:
 The Troubleshooting domain of the exam focuses on diagnosing and resolving issues across the entire Kubernetes stack, from cluster-level problems to application-specific failures. Key competencies include identifying and fixing problems with cluster components, troubleshooting node failures and resource constraints, monitoring resource utilization for both cluster infrastructure and applications, analyzing container logs and output streams for debugging, and resolving service connectivity and networking issues such as DNS problems, network policies, and service endpoint configurations.
 
 **Troubleshooting Applications**
+**Troubleshooting Pods**
+In most cases, creating a Pod is no issue. You simply emit the run, create, or apply commands to instantiate the Pod. If the YAML manifest is formed properly, Kubernetes accepts your request, so the assumption is that everything works as expected. To verify the correct behavior, the first thing you’ll want to do is to check the Pod’s high-level runtime information. The operation could involve other Kubernetes objects like a Deployment responsible for rolling out multiple replicas of a Pod.
+
+**Retrieving High-Level Information**
+After working with Kubernetes for a while, you’ll automatically recognize common error conditions. The table below lists some of those error statuses and explains how to fix them.
+
+Common Pod error statuses
+
+|                           Status | Root cause                                                   | Potential fix                                                                                                                                   |
+| -------------------------------: | :----------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------- |
+| ImagePullBackOff or ErrImagePull | Image could not be pulled from registry.                     | Check correct image name, ensure the image exists in the registry, verify network access from the node to the registry, and ensure proper auth. |
+|                 CrashLoopBackOff | Application or command run in container crashes.             | Check the container's command/entrypoint and logs; verify the image can run locally (e.g., with Docker) and fix application errors.             |
+|       CreateContainerConfigError | ConfigMap or Secret referenced by container cannot be found. | Verify the correct name of the ConfigMap/Secret and ensure the configuration object exists in the same namespace.                               |
+
+**Inspecting Events**
+You might not encounter any of those error statuses. But there’s still a chance of the Pod having a configuration issue. You can retrieve detailed information about the Pod using the kubectl describe pod command to inspect its events.
+
+Another helpful command is kubectl get events. The output of the command lists the events across all Pods for a given namespace. You can use additional command-line options to further filter and sort events:
+
+```bash
+kubectl get events
+```
+
+Sometimes troubleshooting won’t be enough. You may have to dig into the application runtime behavior and configuration in the container.
+
+**Troubleshooting Containers**
+You can interact with the container for a deep-dive into the application’s runtime environment.
+The next sections will discuss how to inspect logs, open an interactive shell to a container, and debug containers that do not provide a shell.
+
+**Inspecting Logs**
+When troubleshooting a Pod, you can retrieve the next level of details by downloading and inspecting its logs. You may or may not find additional information that points to the root cause of a misbehaving Pod, but it’s definitely worth a look.
+
+The logs command provides two helpful options. The option -f streams the logs, meaning you’ll see new log entries as they’re being produced in real time. The option --previous gets the logs from the previous instantiation of a container, which is helpful if the container has been restarted.
+
+**Opening an Interactive Shell**
+If any of the previous commands don’t point you to the root cause of the failing Pod, it’s time to open an interactive shell to a container. Application developers will know best what behavior to expect from the application at runtime. Inspect the running processes by using the Unix or Windows utility tools, depending on the image run in the container.
+
+The exec command opens an interactive shell to troubleshoot in a hands-on fashion.
+
+**Interacting with a Distroless Container**
+Some images run in containers are designed to be very minimal for security reasons. For example, the Google distroless images don’t have any Unix utility tools preinstalled. You can’t even open a shell to a container, as it doesn’t come with a shell.
+
+Kubernetes offers the concept of ephemeral containers. Those containers are meant to be disposable and have no resilience features like probes. You can deploy an ephemeral container for troubleshooting minimal containers that would usually not allow the use of the exec command.
+
+The debug command can inject an ephemeral container to a running Pod for debugging purposes.
+
+The following command adds the ephemeral container running the image busybox to the Pod named minimal-pod and opens an interactive shell for it:
+
+```bash
+kubectl debug -it minimal-pod --image=busybox:1.37.0
+```
+
+**Troubleshooting Services and Networking**
+A Service provides a unified network interface for Pods.
+
+Service and networking problems in Kubernetes are among the most challenging issues to diagnose because they involve multiple layers: Pod networking, service discovery, DNS resolution, network policies, and ingress controllers. These issues typically manifest as connection timeouts, refused connections, or intermittent failures that can cripple application functionality.
+
+**Diagnosing Service-to-Pod Label Selection**
+In case you can’t reach the Pods that should map to the Service, start by ensuring that the label selector matches with the assigned labels of the Pods. You can query the information by describing the Service and then render the labels of the available Pods with the option --show-labels.
+
+```bash
+kubectl describe service myservice
+
+kubectl get pods --show-labels
+```
+
+**Diagnosing Service-to-Pod Port Mapping**
+Services must correctly map ports between the Service definition and the selected Pod’s containers. Check if the port mapping from the target port of the Service to the container port of the Pod is configured correctly. Both ports need to match, or the network traffic wouldn’t be routed properly:
+
+```bash
+kubectl get service myapp -o yaml | grep targetPort:
+
+kubectl get pods myapp-68bf896d89-qfhlv -o yaml | grep containerPort:
+```
+
+**Inspecting the Service’s Endpoints**
+A straightforward way to check if label selection and port mapping are set up properly is to inspect the Service’s endpoints. Service endpoints are API objects that represent the network addresses (IP addresses and ports) of the Pods backing a Service.
+
+Use the get endpoints command to render a Service’s endpoints. Ensure that the output lists the number of Pod IP addresses and container ports expected to be selected by the Service:
+
+```bash
+kubectl get endpoints myservice
+```
+
+If the output of the command does not render any endpoints, then you know that either label selection or port mapping has not been configured correctly in the Service.
+
+**Verifying Accessibility Scope**
+Different service types (ClusterIP, NodePort, LoadBalancer) have different accessibility scopes. By default, the Service type is ClusterIP, which means that a Pod can be reached through the Service only if queried from inside of the cluster.
+
+**DNS Resolution Problems**
+Instead of using the cluster-internal IP address to access a ClusterIP Service, you will likely want to use the Service’s DNS name instead:
+
+```bash
+kubectl run tmp --image=busybox:1.37.0 -it --rm -- wget \
+  myservice.default.svc.cluster.local:80
+```
+
+DNS issues can prevent Pods from resolving service names, causing application failures. It’s possible that the CoreDNS Pods are currently not running. You can check by executing the following command:
+
+```bash
+kubectl get pods -n kube-system -l k8s-app=kube-dns
+
+# To scan the CoreDNS logs for error messages, run the following command:
+
+kubectl logs -n kube-system -l k8s-app=kube-dns --tail=50
+```
+
+CoreDNS logs reveal DNS-related problems through various error patterns that help identify the root cause of service discovery failures. Common issues include upstream connectivity problems where CoreDNS cannot reach external DNS servers, resolution failures for Services that don’t exist or are incorrectly referenced, communication breakdowns with the Kubernetes API server preventing Service discovery, configuration problems causing routing loops or processing errors, and performance issues from either excessive query loads or insufficient resources. By recognizing these patterns in the logs, you can quickly determine whether the problem lies in network connectivity, configuration, or resource allocation.
+
+**Network Policy Restrictions**
+Network policies in Kubernetes act as a firewall at the Pod level, controlling which Pods can communicate with each other and what external traffic is allowed. When network policies are implemented, they follow a “default deny” model—once any network policy selects a Pod, that Pod becomes isolated and can only receive traffic explicitly allowed by policies.
+
+This security feature, while essential for production environments, frequently causes mysterious connectivity issues where applications that previously worked suddenly experience timeouts or connection refused errors. Common symptoms include Pods being unable to reach services they depend on, health checks failing, cross-namespace communication breaking, or external traffic being blocked unexpectedly.
+
+The challenge with troubleshooting network policies lies in their implicit nature—there’s no immediate error message indicating that a network policy is blocking traffic; instead, connections simply fail silently.
+
+Debugging requires systematically checking if network policies exist in the namespace, understanding which Pods they select through their podSelector, examining the ingress and egress rules to see what traffic is permitted, and testing connectivity from different source Pods to identify exactly where the policy enforcement is occurring.
+
+**Inspecting Resource Metrics**
+Deploying software to a Kubernetes cluster is only the start of operating an application long-term. Developers need to understand their applications’ resource consumption patterns and behaviors, with the goal of providing a scalable and reliable service.
+
+In the Kubernetes world, monitoring tools like Prometheus and Datadog help with collecting, processing, and visualizing information over time. The exam does not expect you to be familiar with third-party monitoring, logging, tracing, and aggregation tools; however, it is helpful to have a basic understanding of the underlying Kubernetes infrastructure responsible for collecting usage metrics. The following are examples of typical metrics:
+
+- Number of nodes in the cluster
+- Health status of nodes
+- Node performance metrics such as CPU, memory, disk space
+- Pod-level performance metrics such as CPU and memory consumption
+
+This responsibility falls to the Metrics Server, a cluster-wide aggregator of resource usage data.
+kubelets running on nodes collect metrics and send them to the Metrics Server.
+
+The Metrics Server stores data in memory and does not persist data over time. If you are looking for a solution that keeps historical data, then you need to look into commercial or self-hosted options.
+
+With Metrics server installed, you can now query for metrics of cluster nodes and Pods with the top command:
+
+```bash
+kubectl top nodes
+
+kubectl top pod frontend
+```
+
+It takes a couple of minutes after the installation of the Metrics Server before it has gathered information about resource consumption. Rerun the kubectl top command if you receive the error message error: Metrics API not available.
+
+**Troubleshooting Clusters**
+When a Kubernetes cluster experiences infrastructure-level failures, the impact can be catastrophic. Pods refuse to schedule, applications become unreachable, and entire nodes disappear from the cluster, potentially affecting hundreds of workloads simultaneously. Unlike application-specific issues that might affect a single service, problems with cluster components and nodes strike at the very foundation of your Kubernetes environment, making their swift diagnosis and resolution critical for maintaining system availability.
+
+- Troubleshoot clusters and nodes
+- Troubleshoot cluster components
+
+**Inspecting the Status of Cluster Components**
+Among those components available on the control plane node are the following:
+
+- kube-apiserver: Exposes the Kubernetes API used by clients like kubectl for managing objects
+- etcd: A key-value store for storing the cluster data
+- kube-scheduler: Selects nodes for Pods that have been scheduled but not created
+- corde-dns: Serves as the cluster’s DNS server, automatically creating DNS records that allow Pods and Services to discover each other by name rather than IP addresses, while also handling external DNS resolution for workloads
+- kube-controller-manager: Runs controller processes (e.g., the job controller responsible for Job object execution)
+- cloud-controller-manager (optional): Links cloud provider–specific APIs to the Kubernetes cluster. This controller is not available in on-premise cluster installations of Kubernetes.
+
+In addition to the components running specifically on the control plane nodes, every node (control plane and worker nodes) can contain the following components:
+
+- kubelet: Ensures that all Pods are running, including their containers
+- kube-proxy (optional): Maintains the network rules on nodes to implement Services
+- Container runtime: The software component responsible for running containers
+
+To discover those components and their status, list the Pods available in the namespace kube-system. Be aware that some components do not run in a Pod, e.g., the kubelet or the container runtime.
+
+```bash
+kubectl get pods -n kube-system
+```
+
+Any status that does not show Running should be inspected further. You can retrieve the logs for control plane component Pods in the same fashion you do for any other Pod, using the logs command. The following command downloads the logs for the kube-apiserver component:
+
+```bash
+kubectl logs kube-apiserver -n kube-system
+```
+
+**Troubleshooting Node Issues**
+Control plane nodes are the critical components for keeping a cluster operational.
+
+```bash
+# Rendering Cluster Information
+kubectl cluster-info
+
+# For a detailed view of the cluster logs, append the dump subcommand.
+kubectl cluster-info dump
+
+```
+
+**Node Showing NotReady Status**
+Worker nodes are responsible for managing the workload. Make sure you have a sufficient number of worker nodes available to distribute the load.
+
+```bash
+# Checking Available Resources
+kubectl describe node worker-1
+
+# To check on memory and the number of processes running, use the top command:
+top
+
+# To check on the available disk space, use the command df:
+df -h
+
+# Checking the kubelet Process
+systemctl status kubelet
+
+# Use journalctl to take a look at the log files of the process:
+journalctl -u kubelet.service
+
+# You will want to restart the process once you have identified the issue in the logs and fixed it:
+systemctl restart kubelet
+```
+
+**Checking Certificate Validity**
+Sometimes, the certificate used by the kubelet can expire. Make sure that the values for the attributes Issuer and Not After are correct:
+
+```bash
+openssl x509 -in /var/lib/kubelet/pki/kubelet.crt -text
+
+# For a quick rundown of all certificates in the cluster’s Public Key Infrastructure (PKI), you can use the following command:
+kubeadm certs check-expiration
+
+# You can renew all certificates necessary to run the control plane with the following command:
+kubeadm certs renew all
+```
+
+You must restart the kube-apiserver, kube-controller-manager, kube-scheduler, and etcd, so that they can use the new certificates.
+
+**Checking the kube-proxy Pod**
+The kube-proxy components run in a set of dedicated Pods in the namespace kube-system. You can clearly identify the Pods by their naming prefix kube-proxy and the appended hash. Verify if any of the Pods states a different status than Running. Each of the kube-proxy Pods runs on a dedicated worker node. You can add the -o wide option to render the node the Pod is running on in a new column:
+
+```bash
+kubectl get pods -n kube-system
+```
