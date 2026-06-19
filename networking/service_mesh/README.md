@@ -818,23 +818,22 @@ Same as the Istio API — mTLS is handled automatically by the mesh once traffic
 
 The structural difference is minor — the Gateway API uses a typed certificateRefs block instead of a plain credentialName string, and passthrough gets its own dedicated route type rather than being a VirtualService match condition.
 
-### Service entry
+### Service Entry
 
-When installing Istio, it allows you to configure the Outbound Traffic Policy mode, there are two modes; "REGISTRY_ONLY" and "ALLOW ANY".
-ALLOW_ANY is the default setting, it allows you to communicate with external services even if those services are not defined in Istio's internal service registry. Istio has an internal service registry where it keeps track of all the services inside of the service mesh.
+When Istio is installed, outbound traffic policy can be configured in two modes:
 
-REGISTRY_ONLY: any external service traffic like database or virtual machine for example, if you have not defined this in Istio's internal service registry that out bound traffic will be dropped, that's where the service entry comes into place.
+- ALLOW_ANY (default) — workloads can reach any external service even if it isn't registered in Istio's internal service registry. Convenient, but you lose Istio's monitoring and traffic control for that external traffic.
 
-By default, Envoy allows access to unknown services, so workloads can reach external DBs. It configures the envoy proxy to passthrough requests for unknown services. This is convenient be has a drawback, that is you loose Istio monitoring and control for traffic to external services.
+- REGISTRY_ONLY — outbound traffic to any external service not registered in Istio's registry is dropped. This is where ServiceEntry becomes essential.
 
-Service Entry enables adding external services to Istio's internal registry for routing and access.
+A ServiceEntry registers an external service into Istio's internal registry, making it a first-class mesh citizen — subject to the same traffic management, security, and observability policies as internal services.
 
-**_Why Use a Service Entry_**
+Why use a ServiceEntry:
 
-- Manage external services and egress traffic centrally.
-- Enforce traffic management policies like retries, timeouts, amd mTLS.
-- Enable service discovery for routing to external services.
-- Enforce fine-grained access control and security.
+- Centrally manage egress traffic to external services
+- Apply traffic policies — retries, timeouts, circuit breaking
+- Enforce mTLS and fine-grained access control to external endpoints
+- Enable service discovery and routing for external services
 
 ```bash
 apiVersion: networking.istio.io/v1
@@ -843,32 +842,26 @@ metadata:
   name: postgres-db
 spec:
   hosts:
-  - db.example.com
-  location: MESH_EXTERNAL
+  - db.example.com           # external hostname registered into the mesh
+  location: MESH_EXTERNAL    # tells Istio this service lives outside the mesh
   ports:
   - number: 5432
     name: db
     protocol: TCP
-  resolution: DNS
-
+  resolution: DNS             # resolve the hostname via DNS
 ```
+
+Once registered, you can attach a VirtualService or DestinationRule to db.example.com exactly as you would an internal service — applying timeouts, retries, or mTLS to the external database connection.
 
 ### Fault Injection
 
-Intentionally adding errors or delays between services to test how your application handles problems before they happen in real life. This is to test how your application handles failures, it helps you see if your application breaks or survives if something goes wrong, some applications have fallbacks like returning service not available message or trying a backup message, fault injection helps you test if those backup services actually work before a real failure happens.
+In a distributed system, 100% reliability is impossible by definition — network calls fail, Pods get evicted, Nodes crash. The accepted wisdom is to design for fault tolerance, not fault prevention. This means your services must handle failures gracefully — returning fallbacks, degrading partially, or retrying — rather than cascading into total failure.
 
-We can for any virtual service change the configurations so that Istio will automatically throw an error for a percentage of the time, we can also make a service run slowly by adding delays to any request.
-But why would you want to? One of the main considerations of building any distributed architecture is that you can never have 100% reliability, it's just impossible. By definition we are making network calls in a distributed system and you should never assume that a network is 100% reliable.
-It's fool hardy to try to design a system that aims to be 100% reliable. In the industry we have accepted this wisdom and now generally we understand that for a distributed system you have to have fault tolerance.
+Fault injection answers the question: "what actually happens when a service fails?" — before a real failure exposes the answer in production.
 
-[Fallacies of distributed computing](https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing)
+Istio enables this directly on a VirtualService without touching application code or deleting Pods. Two fault types are available:
 
-[Navigating the 8 fallacies of distributed computing](https://ably.com/blog/8-fallacies-of-distributed-computing)
-
-Bearing in mind in a microservice architecture, you must always assume that a particular Pod(in our case a kubernetes system) can fail at anytime, maybe the Pod runs out of resources, maybe it get rescheduled to another Node because it's been evicted, maybe the whole Node crashes for some reason taking many Pods down with it.
-From regular Kubernetes we can mitigate against that by having multiple replicas of a particular Pod and that's a good strategy for critical Pods, but often times we want to design things so if a particular microservice goes down for any reason, then the system will proceed, everything won't fall in a heap, it maybe degraded in some way, there might be some feature missing but generally we want the system to still continue.
-
-Fault injection answers the question what will happen if a service failed. In the past this might be done by deleting the Pod or creating the version of the Pod which has random failures to it, but we can do all of this using the VirtualService in Istio.
+Delay — simulates a slow service (network latency, resource exhaustion):
 
 ```bash
 apiVersion: networking.istio.io/v1
@@ -882,46 +875,95 @@ spec:
   - fault:
       delay:
         percentage:
-          value: 0.1
-        fixedDelay: 5s
+          value: 10        # inject delay on 10% of requests
+        fixedDelay: 5s     # add a 5 second delay
     route:
     - destination:
         host: ratings
 ```
 
-### Circuit Breaking
-
-One of the nastiest problems in distributed architectures and therefore on Kubernetes based systems is a cascading failure. Cascading failure is a general concept in systems(computer networks in this case) that applies to any failure, where one or few parts can trigger the the failure of other parts. A cascading failure is where you have a problem with just one part of the system. Imagine for some reason one microservice is struggling, it could be that the node it is running on is running out of resources, or the container itself is running out of RAM and starting to perform really badly, it could be a coding problem inside the container's image, maybe you just deployed some bad code there, more likely it's going to be some environmental problem, by environmental I mean it's not a code fault. It's a fault with system resources, or there's a problem with TCP on the Pod. The rest of the system is absolutely fine.
-So what can we do to avoid this problem? The Industry have settled on a very nice pattern that can solve this problem. It's called circuit breaking. The circuit breakers logic is it monitors the success rate of the calls it's making and it's configurable and based on that configuration, if the circuit breaker determines that too many of the requests that it's been making have failed, then the circuit breaker will simply stop relaying any requests.
-So in the event of this circuit breaker kicking in, this client microservice, when it's making network calls now, will be going to the circuit breaker and the circuit breaker will be immediately rejecting those calls, it will be returning something like HTTP 503 back to the microservice without it even doing any kind of network tripping. So it is effectively cutting the connection to the struggling microservice. The purpose of this is that it gives the struggling microservice time to get back on it's feet. Another configuration of in the circuit breaker is it will just check occasionally, it will maybe check once a minute to see if the microservice that it was trying to call is back up and running and if it is, it can reopen the connection and allow calls to continue.
-The whole purpose of this is to stop a heavily loaded system and that absolute flood of requests which were never going to succeed anyway. With the circuit breaker in place, it's so called fail fast mechanism is better for these request to fail immediately, rather than having them holding network resources for 30 plus seconds, when they were never going to succeed.
-In a microservice architecture, you should have good fallbacks in anyways, so when the circuit breaker returns its error immediately, you would hope this microservice would degrade gracefully, it would tell the user for example, I'm sorry the billing system is currently unavailable , come back later.
-The envoy proxies already have circuit breakers built in, it's just for us a case of configuring them. We don't have to build in any special libraries into out microservices to handle circuit breaking, the microservices doesn't know or care that it's working with a circuit breaker.
-The circuit breakers logic is simply that if there are a certain number of consecutive failures coming from a particular Pod(it's specifically from a Pod not a Service), for example a particular Pod has returned three HTTP 503s in a row in a very short period of time, while circuit breakers logic is then to stop loadBalancing to it, it will simply stop sending requests to that part, it will continue to send requests to the other Pods. This why it's important to remember that circuit breaker works on a Pod level, not a Service level. The Service still remains in Service. Blocking of traffic by the circuit breaker is not permanent, there's a configurable interval where it's going to check again. So it might be that we've set things up that every five minutes it will check the situation, it will actually come back in the future, for instance after five minutes, it will start sending requests again, to the affected Pod. If the Pod has recovered, then the circuit breaker will be happy and continue to loadBalance traffic to the Pod. But if the situation is the same, and we get those same failures again, it will simply be evicted(removing the Pod from the loadBalancing poll) again.
-
-Outlier detection is another word for circuit breaking.
-For any service that we want to apply a circuit breaker to, we need to write a destination rule.
-
-Virtual services and Destination rules doesn't always have to come in a pair. You need a virtual service configuration when you are doing custom routing, you need a destination rule in place when you're configuring the loadBalancer. When you are doing Canary releases, which is often the first thing anybody does with Istio traffic management, you need both of them, because in a Canary, you are loadBalancing between two different versions.
-
-But if it's the case that you're doing something that only needs a destination rule, then you only create a destination rule.
-A destination rule for configuring load balancing and circuit breaking.
+Abort — simulates a failing service (HTTP errors, connection refused):
 
 ```bash
-#
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ratings
+spec:
+  hosts:
+  - ratings
+  http:
+  - fault:
+      abort:
+        percentage:
+          value: 10        # return error on 10% of requests
+        httpStatus: 500    # HTTP status code to return
+    route:
+    - destination:
+        host: ratings
+
+```
+
+Both can be combined to simulate a degraded service that is both slow and occasionally failing:
+
+```bash
+fault:
+  delay:
+    percentage:
+      value: 10
+    fixedDelay: 5s
+  abort:
+    percentage:
+      value: 5
+    httpStatus: 503
+```
+
+The percentage field controls the blast radius — you can start small (1–5%) to observe behaviour without overwhelming the system, then increase as needed. Responses from the injected fault come directly from the Envoy sidecar — the actual service Pod is never involved.
+
+[Fallacies of distributed computing](https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing)
+
+[Navigating the 8 fallacies of distributed computing](https://ably.com/blog/8-fallacies-of-distributed-computing)
+
+### Circuit Breaking
+
+In a distributed system, a cascading failure occurs when one struggling component triggers failures across the rest of the system — a single slow or failing microservice floods the entire system with requests that were never going to succeed, holding network resources and degrading everything downstream.
+
+Circuit breaking solves this with a fail-fast mechanism. Rather than letting requests pile up against a struggling service, the circuit breaker monitors failure rates and — once a threshold is crossed — immediately rejects outgoing requests with a 503, without making any network call at all. This gives the struggling service breathing room to recover, while the calling service can degrade gracefully (e.g. "billing is temporarily unavailable").
+
+Periodically, the circuit breaker probes the struggling target — if it has recovered, traffic resumes. If not, the Pod remains ejected.
+
+Key point: circuit breaking in Istio operates at the Pod level, not the Service level. A specific Pod is ejected from the load balancing pool when it crosses the failure threshold — the Service itself remains up and traffic continues routing to healthy Pods.
+
+This is built into Envoy — no libraries or application code changes required. The microservice is completely unaware a circuit breaker is in place.
+
+In Istio, circuit breaking is configured via DestinationRule using outlierDetection (Istio's term for circuit breaking):
+
+```bash
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: circuit-breaker-for-staff-service
 spec:
-  host: fleetman-staff-service.default.svc.cluster.local  # This is the name of the k8s service that we're configuring
-    trafficPolicy:
-      outlierDetection:  # Circuit Breakers HAVE TO BE SWITCHED ON
-        consecutive5xxErrors: 3
-        interval: 20s
-        baseEjectionTime: 30s
-        maxEjectionPercent: 10
+  host: fleetman-staff-service.default.svc.cluster.local
+  trafficPolicy:
+    outlierDetection:
+      consecutive5xxErrors: 3    # eject Pod after 3 consecutive 5xx errors
+      interval: 20s              # how often to scan for failing Pods
+      baseEjectionTime: 30s      # minimum time a Pod stays ejected
+      maxEjectionPercent: 10     # max % of Pods that can be ejected at once
 ```
+
+maxEjectionPercent is a critical safety guard — it prevents the circuit breaker from ejecting so many Pods that the Service itself becomes unavailable. If all Pods are struggling, you likely have a systemic problem, not an outlier.
+
+VirtualService vs DestinationRule — when you need each:
+
+| Scenario                               | VirtualService | DestinationRule |
+| -------------------------------------- | -------------- | --------------- |
+| Custom routing only                    | ✓              | ✗               |
+| Load balancing / circuit breaking only | ✗              | ✓               |
+| Canary release                         | ✓              | ✓               |
+
+They don't always come as a pair — only use what the scenario requires.
 
 ### Zero-Trust Architecture
 
@@ -936,6 +978,7 @@ Istio Implements zero trust by enforcing mTLS for all communications
 - Separately a user will also have to enable authorization so that when we make HTTP requests between services they can only perform request methods like get versus a delete. This is handled by an Istio resource called **authorizationPolicy**
 
 Any project that is deploying to multiple nodes could benefit from mutual TLS.
+
 **_Upgrading the Connection:_**
 When I deploy a Pod containing a container and I am going to be making a call to another container in another Pod. I have a line of code inside the first container which looks something like "call http://myservice-name:8080", a regular plain Kubernetes would implement that as a straightforward HTTP call, in other words plain text between the two containers.
 Now when running an Istio, "call http://myservice-name:8080" is not implemented as a direct container to container call. Instead, it's going through a proxy. And it's crucial to recognize for this discussion that a proxy is part of the same Pod. It's just a container, but it's inside the same Pod, two containers inside the same Pod will always be scheduled together on the same Node, they share the same Networking space and importantly that means to a particular container, the proxy is running on local host. So these network calls that have been made in one Pod are going locally, they're not crossing a network boundary, they are not going out through a network card, they're not going across any wires, and most importantly of all, it's certainly not leaving any buildings, it's local.
@@ -997,16 +1040,16 @@ spec:
 - Within Observability there's this concept that we are trying to align to: Latency, Errors, Traffic and Saturation (LETS) - The Golden signals of Traffic.
 - Istio aims to provide these metrics on these four Golden Signals, so you can discern how services are responding, if they are responding quickly enough, if they are returning the right HTTP status codes, if they are met with some latency, if there are failed requests in a given amount of time and that's all important for building the resiliency into our microservices.
 - Istio provides you the facility to capture logging, tracing information and even metrics around latency or failed requests or even a given amount of requests in a certain period of time. That data that you take is allowing you to decide how you best tune your environment, but it's also telling of failures, any sort of calling limitations that you're currently experiencing and even tells you about any errors that you might be seeing inside of your mesh configuration. It's a great mechanism to help you troubleshoot aspects of services in your mesh.
-- The idea is to make sure we can capture Telemetry somewhere and export it to a system or solution for further analysis and Istio captures that Telemetry for short-term storage, it's not meant for long term storage but there has to be a sync somewhere where all of this can be stored and then further analyzed down the line. It's normally a situation where you pair Istio with something like Prometheus and Grafana in addition to tools like Kali(visualizer of your traffic flow) and Jagger. Grafana gives you a health perspective of how your services and cluster nodes are performing much more form a standpoint of CPU and Memory, Prometheus takes that a little further and gives you more specifics around those details (Think of Prometheus and Grafana as performance related). This adheres to opeTelemetry standards. Jagger is one of those tools that's responsible for telling us how all of our services connect, so when I make a request it's not just one service that responds to it, if we have a bunch of 5 Pods chained together, in Jagger these five Pods will be a part of what we call a request flow, we have to know the sequence of that request flow and how these services are tied together. There's something called B3 header propagation or better known as X header ID, which is a unique ID that ties every single one of those hops together, so it stitches them together so we can visualize, another way to look at this is I am curling to get a response from Service A, Service A talks to Service B, Service B talks to Service C, Service C talks to Service D, before I get my response. Now that B3 header information or X header ID information is consistent between those four Services, signifying that they're tied together for this given request, we call this a Trace, within a Trace we have several spans, each of those hops is considered a Span. This information is very powerful to have if someone is trying to debug.
+- The idea is to make sure we can capture Telemetry somewhere and export it to a system or solution for further analysis and Istio captures that Telemetry for short-term storage, it's not meant for long term storage but there has to be a sync somewhere where all of this can be stored and then further analyzed down the line. It's normally a situation where you pair Istio with something like Prometheus and Grafana in addition to tools like Kali(visualizer of your traffic flow) and Jagger. Grafana gives you a health perspective of how your services and cluster nodes are performing much more from a standpoint of CPU and Memory, Prometheus takes that a little further and gives you more specifics around those details (Think of Prometheus and Grafana as performance related). This adheres to opeTelemetry standards. Jagger is one of those tools that's responsible for telling us how all of our services connect, so when I make a request it's not just one service that responds to it, if we have a bunch of 5 Pods chained together, in Jagger these five Pods will be a part of what we call a request flow, we have to know the sequence of that request flow and how these services are tied together. There's something called B3 header propagation or better known as X header ID, which is a unique ID that ties every single one of those hops together, so it stitches them together so we can visualize, another way to look at this is I am curling to get a response from Service A, Service A talks to Service B, Service B talks to Service C, Service C talks to Service D, before I get my response. Now that B3 header information or X header ID information is consistent between those four Services, signifying that they're tied together for this given request, we call this a Trace, within a Trace we have several spans, each of those hops is considered a Span. This information is very powerful to have if someone is trying to debug.
 
-# Upgrading Istio
+# Upgrading Istio (sidecar mode)
 
 What you have to do if you have a production cluster running and Istio running at a particular version, and then you decide you want to upgrade Istio to a more recent version.
 The problem with upgrading is that Istio isn't a feature, it's not a single Pod. Istio is cutting across your entire infrastructure.
 We have the control plane in Istio which is just a single part, it's IstioD running inside its own namespace, that's not such a big deal. The big deal is that you have these sidecars running in every single one of your Pods. The danger is, in doing an upgrade, we're going to have to be switching things around, and in the process of doing so there's a very high chance that we might have downtime, that's the thing that we are worried about. If anything goes wrong during the rollout, and we want to undo the process and go back to where we were, then that could be an emergency procedure. And while you're doing it, it could be that your application is down and you get lots of angry users.
 
 **Canary Upgrade (Rolling Upgrades)**
-This is more of a staged release (I always think of a canary as being where you release a new feature to a small number of users or a small number of requests). Istio is not a feature, it's a major infrastructure components, and what we are really doing here is we're deploying two versions of the infrastructure an we're going to slowly switch from one to the other. That feels more like a rolling deployment or a staged deployment.
+This is more of a staged release (I always think of a canary as being where you release a new feature to a small number of users or a small number of requests). Istio is not a feature, it's a major infrastructure components, and what we are really doing here is we're deploying two versions of the infrastructure and we're going to slowly switch from one to the other. That feels more like a rolling deployment or a staged deployment.
 
 ```bash
 # Install an old version of Istio with a tag(use any name or number to state what the version is).
